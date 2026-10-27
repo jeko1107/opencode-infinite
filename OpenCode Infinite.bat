@@ -28,10 +28,8 @@ set "WARP_WAIT=6"
 REM ---------- internal ---------------------------------------------
 set "PROXY=http://127.0.0.1:40000"
 set "TRACE_URL=https://www.cloudflare.com/cdn-cgi/trace"
-set "HTTP_PROXY=%PROXY%"
-set "HTTPS_PROXY=%PROXY%"
+set "WARP_MSI_URL=https://downloads.cloudflareclient.com/v1/download/windows/ga"
 set "NO_PROXY=localhost,127.0.0.1,0.0.0.0"
-set "no_proxy=%NO_PROXY%"
 
 set "DATA_DIR=%USERPROFILE%\.local\share\opencode"
 set "LOGFILE=%DATA_DIR%\log\opencode.log"
@@ -242,12 +240,15 @@ echo                       (your chats and history stay untouched)
 echo   [2] Continue      - same IP, open OpenCode as it was
 echo   [3] Change IP     - rotate only, do not open OpenCode
 echo   [4] Folder        - work in a different folder
-echo   [5] Exit
+echo   [5] Deep reset    - kill opencode, move chats to the Desktop,
+echo                       clear saved tokens, open a fresh session
+echo   [6] Exit
 echo.
 echo   One key, no Enter.
 echo.
-choice /c 12345 /n /m "Pick: "
-if errorlevel 5 goto :quit
+choice /c 123456 /n /m "Pick: "
+if errorlevel 6 goto :quit
+if errorlevel 5 goto :run_deep
 if errorlevel 4 goto :folder
 if errorlevel 3 goto :rotate
 if errorlevel 2 goto :run_warm
@@ -259,6 +260,24 @@ goto :run
 
 :run_warm
 set "COLD=0"
+goto :run
+
+REM -- the discord-style reset: close, archive, wipe tokens, reopen --
+:run_deep
+echo.
+echo --- deep reset -----------------------------------------------
+echo   This closes opencode, moves your chats to the Desktop,
+echo   clears the saved tokens and opens a brand new session.
+echo   It is the only action in this script that touches your files.
+echo.
+choice /c yn /n /m "  Do that now? [Y/N] "
+if errorlevel 2 goto :menu_loop
+call :stop_opencode
+call :deep_archive
+call :clear_tokens
+call :prime_spoof
+set "RESUME="
+set "COLD=1"
 goto :run
 
 :run
@@ -279,6 +298,7 @@ if defined RESUME set "FLAGS=--continue"
 if defined RESUME echo   reopening the last session on the new IP...
 set "RESUME="
 
+call :export_proxy
 REM opencode ships as a .cmd shim on npm installs: call is mandatory.
 call "%OC_CMD%" %FLAGS%
 set "EC=%errorlevel%"
@@ -376,15 +396,30 @@ REM -- install WARP (UAC once) --------------------------------------
 :install_warp
 set "MSI=%TEMP%\Cloudflare_WARP_x64.msi"
 if exist "%MSI%" del /f /q "%MSI%" >nul 2>&1
+REM the proxy this script hands to opencode IS warp, so it cannot be
+REM used to download warp. clear it for this one request.
+set "KEEP_HP=%HTTP_PROXY%"
+set "KEEP_SP=%HTTPS_PROXY%"
+set "HTTP_PROXY="
+set "HTTPS_PROXY="
+echo   downloading the WARP installer, about 60 MB...
 if "%HAVE_CURL%"=="1" (
-  curl.exe -L -s -o "%MSI%" "https://1.1.1.1/Cloudflare_WARP_x64.msi"
+  curl.exe -L -f -s --max-time 900 --noproxy "*" -o "%MSI%" "%WARP_MSI_URL%"
 ) else (
-  powershell -NoProfile -Command "try{[Net.ServicePointManager]::SecurityProtocol=[Net.SecurityProtocolType]::Tls12; Invoke-WebRequest -Uri 'https://1.1.1.1/Cloudflare_WARP_x64.msi' -OutFile '%MSI%'}catch{}" >nul 2>&1
+  powershell -NoProfile -Command "try{[Net.ServicePointManager]::SecurityProtocol=[Net.SecurityProtocolType]::Tls12; Invoke-WebRequest -UseBasicParsing -Uri '%WARP_MSI_URL%' -OutFile '%MSI%'}catch{}" >nul 2>&1
 )
-if not exist "%MSI%" (
+set "HTTP_PROXY=%KEEP_HP%"
+set "HTTPS_PROXY=%KEEP_SP%"
+REM a 404 page also lands in the file, so trust the size, not the exit code
+set "MSIOK=0"
+if exist "%MSI%" for %%M in ("%MSI%") do if not "%%~zM"=="" if %%~zM GTR 5000000 set "MSIOK=1"
+if not "%MSIOK%"=="1" (
   echo   [!] download failed.
+  echo       grab it by hand and run it: %WARP_MSI_URL%
+  if exist "%MSI%" del /f /q "%MSI%" >nul 2>&1
   goto :eof
 )
+echo   installing, accept the UAC prompt...
 powershell -NoProfile -Command "try{Start-Process msiexec.exe -ArgumentList '/i','%MSI%','/qn' -Verb RunAs -Wait}catch{}" >nul 2>&1
 del /f /q "%MSI%" >nul 2>&1
 goto :eof
@@ -474,6 +509,80 @@ if exist "%QOUT%" del /f /q "%QOUT%" >nul 2>&1
 powershell -NoProfile -Command "try{ $fs=[IO.File]::Open('%LOGFILE%','Open','Read','ReadWrite'); [void]$fs.Seek(%SIZE_BEFORE%,'Begin'); $sr=New-Object IO.StreamReader($fs); $t=$sr.ReadToEnd(); $sr.Close(); if($t -match '(?i)free usage limit|usage limit|quota|rate limit'){Set-Content -LiteralPath '%QOUT%' -Value 'HIT'}else{Set-Content -LiteralPath '%QOUT%' -Value 'NOHIT'} }catch{Set-Content -LiteralPath '%QOUT%' -Value 'NOHIT'}" >nul 2>&1
 if exist "%QOUT%" for /f "usebackq delims=" %%q in ("%QOUT%") do if /i "%%q"=="HIT" set "QHIT=1"
 if exist "%QOUT%" del /f /q "%QOUT%" >nul 2>&1
+goto :eof
+
+REM -- close every opencode process so the chat db unlocks ------------
+:stop_opencode
+if defined OC_CMD call "%OC_CMD%" service stop >nul 2>&1
+taskkill /f /im "OpenCode.exe" >nul 2>&1
+taskkill /f /im "opencode.exe" >nul 2>&1
+taskkill /f /im "opencode-cli.exe" >nul 2>&1
+timeout /t 2 /nobreak >nul 2>&1
+goto :eof
+
+REM -- the desktop can be redirected to OneDrive or another drive ----
+:find_desktop
+set "DESKTOP="
+for /f "usebackq delims=" %%D in (`powershell -NoProfile -Command "[Environment]::GetFolderPath('Desktop')" 2^>nul`) do if not defined DESKTOP set "DESKTOP=%%D"
+if defined DESKTOP if not exist "%DESKTOP%\" set "DESKTOP="
+if not defined DESKTOP if exist "%USERPROFILE%\OneDrive\Escritorio" set "DESKTOP=%USERPROFILE%\OneDrive\Escritorio"
+if not defined DESKTOP if exist "%USERPROFILE%\OneDrive\Desktop" set "DESKTOP=%USERPROFILE%\OneDrive\Desktop"
+if not defined DESKTOP if exist "%USERPROFILE%\Desktop" set "DESKTOP=%USERPROFILE%\Desktop"
+if not defined DESKTOP set "DESKTOP=%USERPROFILE%"
+goto :eof
+
+REM -- move the chats out of the way, timestamped, never overwritten --
+:deep_archive
+if not defined DESKTOP call :find_desktop
+set "ARCHIVE_ROOT=%DESKTOP%\opencode_chats_archiviate"
+set "STAMP="
+for /f "usebackq delims=" %%T in (`powershell -NoProfile -Command "Get-Date -Format yyyyMMdd-HHmmss"`) do set "STAMP=%%T"
+if not defined STAMP set "STAMP=r%RANDOM%%RANDOM%"
+set "TARGET=%ARCHIVE_ROOT%\%STAMP%"
+echo   archiving chats to:
+echo     %TARGET%
+set "MOVED=0"
+if exist "%DATA_DIR%\storage" (
+  if not exist "%TARGET%" mkdir "%TARGET%" >nul 2>&1
+  move /y "%DATA_DIR%\storage" "%TARGET%\storage" >nul 2>&1 && set "MOVED=1"
+)
+for %%F in (opencode.db opencode.db-wal opencode.db-shm) do (
+  if exist "%DATA_DIR%\%%F" (
+    if not exist "%TARGET%" mkdir "%TARGET%" >nul 2>&1
+    move /y "%DATA_DIR%\%%F" "%TARGET%\%%F" >nul 2>&1 && set "MOVED=1"
+  )
+)
+if "%MOVED%"=="0" (
+  if exist "%TARGET%" rmdir "%TARGET%" >nul 2>&1
+  echo   nothing to archive.
+) else (
+  echo   archived.
+)
+goto :eof
+
+REM -- cache and saved tokens ----------------------------------------
+:clear_tokens
+set "CACHE_DIR=%USERPROFILE%\.cache\opencode"
+if exist "%CACHE_DIR%" rmdir /s /q "%CACHE_DIR%" >nul 2>&1
+if exist "%DATA_DIR%\auth.json" del /f /q "%DATA_DIR%\auth.json" >nul 2>&1
+echo   cache and tokens cleared.
+goto :eof
+
+REM -- hand the WARP proxy to the child process only -----------------
+REM setting it at the top would poison every download made before WARP
+REM is even installed: nothing listens on 40000 yet.
+:export_proxy
+if not defined WARP goto :eof
+set "HTTP_PROXY=%PROXY%"
+set "HTTPS_PROXY=%PROXY%"
+set "no_proxy=%NO_PROXY%"
+goto :eof
+
+REM -- the three variables the discord script set --------------------
+:prime_spoof
+set "OPENCODE_SYNTHESIZE_CLI_HEADERS=true"
+set "OPENCODE_CLIENT_UA=opencode/1.18.25"
+set "OPENCODE_SESSION_ID=msg_%RANDOM%%RANDOM%%RANDOM%"
 goto :eof
 
 :quit
