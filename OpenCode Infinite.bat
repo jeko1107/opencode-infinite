@@ -26,7 +26,8 @@ REM Seconds to wait after (re)connecting WARP.
 set "WARP_WAIT=6"
 
 REM ---------- internal ---------------------------------------------
-set "PROXY=http://127.0.0.1:40000"
+set "PROXY_PORT=40000"
+set "PROXY=http://127.0.0.1:%PROXY_PORT%"
 set "TRACE_URL=https://www.cloudflare.com/cdn-cgi/trace"
 set "WARP_MSI_URL=https://downloads.cloudflareclient.com/v1/download/windows/ga"
 set "NO_PROXY=localhost,127.0.0.1,0.0.0.0"
@@ -593,10 +594,32 @@ REM setting it at the top would poison every download made before WARP
 REM is even installed: nothing listens on 40000 yet.
 :export_proxy
 if not defined WARP goto :eof
+REM a warp-cli.exe on disk is not a working tunnel. if the proxy cannot
+REM carry one https request, opencode goes direct instead of resetting
+REM every stream it opens.
+call :proxy_ok
+if errorlevel 1 (
+  echo   [!] WARP proxy is not answering - using the direct connection.
+  echo       rotation has no effect until it comes back.
+  goto :eof
+)
 set "HTTP_PROXY=%PROXY%"
 set "HTTPS_PROXY=%PROXY%"
 set "no_proxy=%NO_PROXY%"
 goto :eof
+
+REM -- can the proxy actually carry an https request? ----------------
+REM 0 = usable, 1 = not. one request, five seconds, no retries.
+:proxy_ok
+if not "%HAVE_CURL%"=="1" goto :proxy_ok_tcp
+curl.exe -sS -o nul -f --max-time 5 --noproxy "" --proxy "%PROXY%" "%TRACE_URL%" >nul 2>&1
+if errorlevel 1 exit /b 1
+exit /b 0
+
+:proxy_ok_tcp
+"%PSX%" -NoProfile -Command "try{$c=New-Object Net.Sockets.TcpClient;$a=$c.BeginConnect('127.0.0.1',%PROXY_PORT%,$null,$null);if(-not $a.AsyncWaitHandle.WaitOne(1500)){exit 1};$c.EndConnect($a);$c.Close();exit 0}catch{exit 1}" >nul 2>&1
+if errorlevel 1 exit /b 1
+exit /b 0
 
 REM -- the three variables the discord script set --------------------
 :prime_spoof
