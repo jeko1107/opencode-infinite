@@ -30,6 +30,9 @@ set "PROXY=http://127.0.0.1:40000"
 set "TRACE_URL=https://www.cloudflare.com/cdn-cgi/trace"
 set "WARP_MSI_URL=https://downloads.cloudflareclient.com/v1/download/windows/ga"
 set "NO_PROXY=localhost,127.0.0.1,0.0.0.0"
+REM a machine with a broken PATH still has powershell at a fixed address
+set "PSX=powershell"
+if exist "%SystemRoot%\System32\WindowsPowerShell\v1.0\powershell.exe" set "PSX=%SystemRoot%\System32\WindowsPowerShell\v1.0\powershell.exe"
 
 set "DATA_DIR=%USERPROFILE%\.local\share\opencode"
 set "LOGFILE=%DATA_DIR%\log\opencode.log"
@@ -158,47 +161,12 @@ REM ---------- opencode ----------
 call :find_opencode
 if defined OC_CMD goto :ready
 
-echo   [auto-install] opencode not found, installing with npm...
-where npm >nul 2>&1
-if errorlevel 1 goto :no_npm
-goto :npm_install
-
-:no_npm
-where scoop >nul 2>&1
-if errorlevel 1 (
-  echo   [auto-install] npm and scoop missing.
-  echo   Scoop installs into the user folder, no admin needed.
-  choice /c YN /n /m "   Install scoop + node now? [Y/N]: "
-  if errorlevel 2 (
-    echo   ERROR: opencode cannot be installed without node/npm.
-    echo   Install Node.js from nodejs.org, then run this again.
-    pause
-    goto :quit
-  )
-  powershell -NoProfile -ExecutionPolicy Bypass -Command "irm get.scoop.sh | iex"
-  set "PATH=%PATH%;%USERPROFILE%\scoop\shims"
-  where scoop >nul 2>&1
-  if errorlevel 1 (
-    echo   ERROR: scoop did not become available. Reopen this window and retry.
-    pause
-    goto :quit
-  )
-)
-echo   [auto-install] installing nodejs with scoop...
-call scoop install nodejs
-where npm >nul 2>&1
-if errorlevel 1 (
-  echo   ERROR: node installed but npm is not on PATH. Reopen this window.
-  pause
-  goto :quit
-)
-
-:npm_install
-call npm install -g opencode-ai
-set "PATH=%PATH%;%APPDATA%\npm"
+echo   [auto-install] opencode not found, fetching it...
+call :install_opencode
 call :find_opencode
 if not defined OC_CMD (
   echo   ERROR: opencode install failed or is not on PATH.
+  echo   Get it by hand: https://github.com/sst/opencode/releases
   pause
   goto :quit
 )
@@ -406,7 +374,7 @@ echo   downloading the WARP installer, about 60 MB...
 if "%HAVE_CURL%"=="1" (
   curl.exe -L -f -s --max-time 900 --noproxy "*" -o "%MSI%" "%WARP_MSI_URL%"
 ) else (
-  powershell -NoProfile -Command "try{[Net.ServicePointManager]::SecurityProtocol=[Net.SecurityProtocolType]::Tls12; Invoke-WebRequest -UseBasicParsing -Uri '%WARP_MSI_URL%' -OutFile '%MSI%'}catch{}" >nul 2>&1
+  "%PSX%" -NoProfile -Command "try{[Net.ServicePointManager]::SecurityProtocol=[Net.SecurityProtocolType]::Tls12; Invoke-WebRequest -UseBasicParsing -Uri '%WARP_MSI_URL%' -OutFile '%MSI%'}catch{}" >nul 2>&1
 )
 set "HTTP_PROXY=%KEEP_HP%"
 set "HTTPS_PROXY=%KEEP_SP%"
@@ -420,8 +388,61 @@ if not "%MSIOK%"=="1" (
   goto :eof
 )
 echo   installing, accept the UAC prompt...
-powershell -NoProfile -Command "try{Start-Process msiexec.exe -ArgumentList '/i','%MSI%','/qn' -Verb RunAs -Wait}catch{}" >nul 2>&1
+"%PSX%" -NoProfile -Command "try{Start-Process msiexec.exe -ArgumentList '/i','%MSI%','/qn' -Verb RunAs -Wait}catch{}" >nul 2>&1
 del /f /q "%MSI%" >nul 2>&1
+goto :eof
+
+REM -- install opencode: npm when present, else the standalone build --
+REM the standalone zip needs no node, no package manager and no admin.
+:install_opencode
+if exist "%LOCALAPPDATA%\opencode\bin\opencode.exe" goto :eof
+where npm >nul 2>&1
+if errorlevel 1 goto :standalone
+call :npm_install
+call :find_opencode
+if defined OC_CMD goto :eof
+echo   [auto-install] npm did not deliver it, going standalone.
+
+:standalone
+set "OCARCH=x64"
+if /i "%PROCESSOR_ARCHITECTURE%"=="ARM64" set "OCARCH=arm64"
+set "OC_URL=https://github.com/sst/opencode/releases/latest/download/opencode-windows-%OCARCH%.zip"
+set "OCZIP=%TEMP%\opencode-windows.zip"
+set "OCBIN=%LOCALAPPDATA%\opencode\bin"
+echo   [auto-install] downloading the standalone build...
+echo     %OC_URL%
+if exist "%OCZIP%" del /f /q "%OCZIP%" >nul 2>&1
+REM same trap as the warp installer: the proxy cannot fetch itself
+set "KEEP_HP=%HTTP_PROXY%"
+set "KEEP_SP=%HTTPS_PROXY%"
+set "HTTP_PROXY="
+set "HTTPS_PROXY="
+if "%HAVE_CURL%"=="1" (
+  curl.exe -L -f -s --max-time 900 --noproxy "*" -o "%OCZIP%" "%OC_URL%"
+) else (
+  "%PSX%" -NoProfile -Command "try{[Net.ServicePointManager]::SecurityProtocol=[Net.SecurityProtocolType]::Tls12; Invoke-WebRequest -UseBasicParsing -Uri '%OC_URL%' -OutFile '%OCZIP%'}catch{}" >nul 2>&1
+)
+set "HTTP_PROXY=%KEEP_HP%"
+set "HTTPS_PROXY=%KEEP_SP%"
+set "ZOK=0"
+if exist "%OCZIP%" for %%Z in ("%OCZIP%") do if not "%%~zZ"=="" if %%~zZ GTR 5000000 set "ZOK=1"
+if not "%ZOK%"=="1" (
+  echo     [!] download failed.
+  if exist "%OCZIP%" del /f /q "%OCZIP%" >nul 2>&1
+  goto :eof
+)
+if not exist "%OCBIN%" mkdir "%OCBIN%" >nul 2>&1
+echo   [auto-install] unpacking, about 200 MB on disk...
+"%PSX%" -NoProfile -Command "try{Expand-Archive -LiteralPath '%OCZIP%' -DestinationPath '%OCBIN%' -Force}catch{}" >nul 2>&1
+del /f /q "%OCZIP%" >nul 2>&1
+set "PATH=%PATH%;%OCBIN%"
+if exist "%OCBIN%\opencode.exe" echo   [ok] installed to %OCBIN%
+goto :eof
+
+:npm_install
+echo   [auto-install] installing with npm...
+call npm install -g opencode-ai
+set "PATH=%PATH%;%APPDATA%\npm"
 goto :eof
 
 REM -- locate opencode anywhere reasonable --------------------------
@@ -432,7 +453,6 @@ for /f "delims=" %%o in ('where opencode.exe 2^>nul') do if not defined OC_CMD s
 if not defined OC_CMD for /f "delims=" %%o in ('where opencode.cmd 2^>nul') do if not defined OC_CMD set "OC_CMD=%%o"
 if not defined OC_CMD for /f "delims=" %%o in ('where opencode.bat 2^>nul') do if not defined OC_CMD set "OC_CMD=%%o"
 if not defined OC_CMD if exist "%APPDATA%\npm\opencode.cmd" set "OC_CMD=%APPDATA%\npm\opencode.cmd"
-if not defined OC_CMD if exist "%USERPROFILE%\scoop\shims\opencode.cmd" set "OC_CMD=%USERPROFILE%\scoop\shims\opencode.cmd"
 if not defined OC_CMD if exist "%LOCALAPPDATA%\Programs\opencode\opencode.exe" set "OC_CMD=%LOCALAPPDATA%\Programs\opencode\opencode.exe"
 if not defined OC_CMD if exist "%LOCALAPPDATA%\opencode\bin\opencode.exe" set "OC_CMD=%LOCALAPPDATA%\opencode\bin\opencode.exe"
 if not defined OC_CMD if exist "%USERPROFILE%\.opencode\bin\opencode.exe" set "OC_CMD=%USERPROFILE%\.opencode\bin\opencode.exe"
@@ -506,7 +526,7 @@ REM -- did this run write a quota line to the log? ------------------
 set "QHIT="
 set "QOUT=%TEMP%\opencode_quota.txt"
 if exist "%QOUT%" del /f /q "%QOUT%" >nul 2>&1
-powershell -NoProfile -Command "try{ $fs=[IO.File]::Open('%LOGFILE%','Open','Read','ReadWrite'); [void]$fs.Seek(%SIZE_BEFORE%,'Begin'); $sr=New-Object IO.StreamReader($fs); $t=$sr.ReadToEnd(); $sr.Close(); if($t -match '(?i)free usage limit|usage limit|quota|rate limit'){Set-Content -LiteralPath '%QOUT%' -Value 'HIT'}else{Set-Content -LiteralPath '%QOUT%' -Value 'NOHIT'} }catch{Set-Content -LiteralPath '%QOUT%' -Value 'NOHIT'}" >nul 2>&1
+"%PSX%" -NoProfile -Command "try{ $fs=[IO.File]::Open('%LOGFILE%','Open','Read','ReadWrite'); [void]$fs.Seek(%SIZE_BEFORE%,'Begin'); $sr=New-Object IO.StreamReader($fs); $t=$sr.ReadToEnd(); $sr.Close(); if($t -match '(?i)free usage limit|usage limit|quota|rate limit'){Set-Content -LiteralPath '%QOUT%' -Value 'HIT'}else{Set-Content -LiteralPath '%QOUT%' -Value 'NOHIT'} }catch{Set-Content -LiteralPath '%QOUT%' -Value 'NOHIT'}" >nul 2>&1
 if exist "%QOUT%" for /f "usebackq delims=" %%q in ("%QOUT%") do if /i "%%q"=="HIT" set "QHIT=1"
 if exist "%QOUT%" del /f /q "%QOUT%" >nul 2>&1
 goto :eof
