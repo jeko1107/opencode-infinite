@@ -261,6 +261,7 @@ if "%COLD%"=="1" if defined WARP call :ensure_new_ip
 
 set "SIZE_BEFORE=0"
 for %%S in ("%LOGFILE%") do if not "%%~zS"=="" set "SIZE_BEFORE=%%~zS"
+set "WHY="
 
 set "FLAGS="
 if defined RESUME set "FLAGS=--continue"
@@ -273,20 +274,32 @@ call "%OC_CMD%" %FLAGS%
 set "EC=%errorlevel%"
 echo.
 
-if not "%EC%"=="0" goto :quota_rotate
+if not "%EC%"=="0" goto :exit_rotate
 if not defined WARP goto :closed
 call :check_quota
-if defined QHIT goto :quota_rotate
+if defined QHIT (
+  set "WHY=quota"
+  goto :quota_rotate
+)
 
 :closed
-echo OpenCode closed normally.
+echo OpenCode closed.
 if not defined WARP goto :menu_loop
-choice /c YN /n /m "Reopen with a different IP? [Y/N]: "
-if not errorlevel 2 goto :rotate
-goto :menu_loop
+echo.
+echo   Ctrl+C is the stop button: one press hands you a new IP and
+echo   reopens the same session, so you retry without asking again.
+choice /c yn /n /t 5 /d y /m "  New IP and reopen in 5s [Y], N for the menu: "
+if errorlevel 2 goto :menu_loop
+set "WHY=stop"
+goto :quota_rotate
+
+:exit_rotate
+set "WHY=exit"
 
 :quota_rotate
-echo OpenCode exited with code %EC%.
+if "%WHY%"=="exit" echo OpenCode exited with code %EC%.
+if "%WHY%"=="quota" echo Free quota reached on this IP.
+if "%WHY%"=="stop" echo Reopening on a new IP.
 if not defined WARP goto :menu_loop
 echo Getting a new IP before the next attempt...
 timeout /t 3 /nobreak >nul 2>&1
@@ -527,7 +540,7 @@ REM -- did this run write a quota line to the log? ------------------
 set "QHIT="
 set "QOUT=%TEMP%\opencode_quota.txt"
 if exist "%QOUT%" del /f /q "%QOUT%" >nul 2>&1
-"%PSX%" -NoProfile -Command "try{ $fs=[IO.File]::Open('%LOGFILE%','Open','Read','ReadWrite'); [void]$fs.Seek(%SIZE_BEFORE%,'Begin'); $sr=New-Object IO.StreamReader($fs); $t=$sr.ReadToEnd(); $sr.Close(); if($t -match '(?i)free usage limit|usage limit|quota|rate limit'){Set-Content -LiteralPath '%QOUT%' -Value 'HIT'}else{Set-Content -LiteralPath '%QOUT%' -Value 'NOHIT'} }catch{Set-Content -LiteralPath '%QOUT%' -Value 'NOHIT'}" >nul 2>&1
+"%PSX%" -NoProfile -Command "try{ $fs=[IO.File]::Open('%LOGFILE%','Open','Read','ReadWrite'); [void]$fs.Seek(%SIZE_BEFORE%,'Begin'); $sr=New-Object IO.StreamReader($fs); $t=$sr.ReadToEnd(); $sr.Close(); if($t -match '(?i)free usage limit'){Set-Content -LiteralPath '%QOUT%' -Value 'HIT'}else{Set-Content -LiteralPath '%QOUT%' -Value 'NOHIT'} }catch{Set-Content -LiteralPath '%QOUT%' -Value 'NOHIT'}" >nul 2>&1
 if exist "%QOUT%" for /f "usebackq delims=" %%q in ("%QOUT%") do if /i "%%q"=="HIT" set "QHIT=1"
 if exist "%QOUT%" del /f /q "%QOUT%" >nul 2>&1
 goto :eof
