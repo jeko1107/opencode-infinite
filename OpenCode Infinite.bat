@@ -2,13 +2,13 @@
 setlocal EnableExtensions
 title OpenCode
 REM ============================================================
-REM  OpenCode launcher  (v2.7)
+REM  OpenCode launcher  (v2.8)
 REM  WARP egress rotation + dependency bootstrap + auto-resume.
 REM
 REM  Usage:
 REM    double-click                          -> folder menu
 REM    drag a folder onto this file          -> opens in that folder
-REM    "OpenCode Infinite v2.7.bat" "D:\work\project"
+REM    "OpenCode Infinite v2.8.bat" "D:\work\project"
 REM                                          -> opens in that folder
 REM
 REM  This script never moves, renames or deletes your chats, your
@@ -34,8 +34,9 @@ REM    text instead of failing inside opencode. The menu shows the
 REM    version and path actually in use.
 REM
 REM  - Bootstraps what is missing: WARP (silent MSI install, UAC
-REM    once) and opencode (npm first, standalone build otherwise),
-REM    with curl -f and a size gate on every download.
+REM    once) and opencode (npm first, standalone build otherwise,
+REM    npm with 32-bit node on x86), with curl -f and a size gate on
+REM    every download.
 REM
 REM  - Rotates the WARP egress IP through the local proxy: drops the
 REM    old registration, creates a new one, verifies the trace says
@@ -1040,23 +1041,24 @@ call :find_opencode
 if defined OC_CMD goto :eof
 echo   [auto-install] npm did not deliver it, going standalone.
 
-REM Standalone build. Chooses x64 or arm64; 32-bit systems are not supported.
+REM Standalone build. Chooses x64 or arm64; 32-bit systems go through npm.
 :standalone
 set "OCARCH=x64"
 if /i "%PROCESSOR_ARCHITECTURE%"=="ARM64" set "OCARCH=arm64"
 if not "%REAL86%"=="1" goto :sa_ok
-echo   [!] 32-bit Windows: opencode publishes x64 and arm64 builds only.
-echo       The standalone download will not run here.
-REM On 32-bit, the only option left is npm with 32-bit node.
-call :have_exe npm
-if "%HAVE%"=="1" (
-  echo       npm exists - trying it...
-  call :npm_install
-  call :find_opencode
-  if defined OC_CMD goto :eof
+REM 32-bit: opencode publishes no x86 Windows binary. The JS package
+REM runs fine on 32-bit node, so the npm route is the supported path.
+echo   [i] 32-bit Windows: no standalone build - installing via npm.
+call :install_node_x86
+call :npm_install
+call :find_opencode
+if defined OC_CMD (
+  echo   [ok] opencode ready on 32-bit via npm.
+  goto :eof
 )
-echo   ERROR: opencode cannot be auto-installed on 32-bit Windows.
-echo          Install 32-bit node.js, then run: npm i -g opencode-ai
+echo   ERROR: opencode could not be installed on 32-bit Windows.
+echo          Install 32-bit node.js by hand from nodejs.org, then run:
+echo          npm i -g opencode-ai
 pause
 goto :quit
 
@@ -1108,8 +1110,67 @@ REM Install opencode with npm globally, then add the npm folder to PATH for this
 :npm_install
 echo   [auto-install] installing with npm...
 call npm install -g opencode-ai
-set "PATH=%PATH%;%APPDATA%\npm"
+set "PATH=%PATH%;%ProgramFiles%\nodejs;%APPDATA%\npm"
 goto :eof
+
+REM - 32-bit support: make sure npm exists, installing node if not
+REM opencode publishes no x86 Windows binary, so npm with 32-bit node
+REM is the only supported route there. Node installs through winget
+REM when the Windows package manager is present, else a pinned 32-bit
+REM MSI from the nodejs.org v22 LTS line; the MSI size is gated like
+REM every other download and direct-egress failures retry through the
+REM Windows proxy settings. /qn installs silently after the UAC prompt.
+:install_node_x86
+call :have_exe npm
+if "%HAVE%"=="1" goto :eof
+echo   [auto-install] node.js (32-bit) is missing - installing it...
+call :have_exe winget.exe
+if "%HAVE%"=="1" goto :node_winget
+goto :node_msi
+:node_winget
+echo     via winget...
+echo   [i] this can take a few minutes on its first run.
+"%PSX%" -NoProfile -Command "$p=Start-Process -FilePath winget.exe -ArgumentList @('install','--id','OpenJS.NodeJS.LTS','--silent','--accept-package-agreements','--accept-source-agreements','--disable-interactivity') -NoNewWindow -PassThru; $null=$p.Handle; if(-not $p.WaitForExit(600000)){ try{$p.Kill()}catch{}; exit 1 }; exit $p.ExitCode" >nul 2>&1
+if not errorlevel 1 goto :node_done
+echo     winget failed - trying the MSI installer from nodejs.org...
+:node_msi
+REM Pinned: the pin moves with the LTS line; bump the version tag when
+REM nodejs.org retires v22 (the MSI filename embeds the version).
+set "NODE_MSI_URL=https://nodejs.org/dist/v22.13.1/node-v22.13.1-x86.msi"
+set "NODE_MSI=%TEMP%\node_x86.msi"
+if exist "%NODE_MSI%" del /f /q "%NODE_MSI%" >nul 2>&1
+set "KEEP_HP=%HTTP_PROXY%"
+set "KEEP_SP=%HTTPS_PROXY%"
+set "HTTP_PROXY="
+set "HTTPS_PROXY="
+set "OC_URL=%NODE_MSI_URL%"
+set "OC_OUT=%NODE_MSI%"
+echo     downloading %NODE_MSI_URL% ...
+if "%HAVE_CURL%"=="1" goto :nx_curl
+"%PSX%" -NoProfile -Command "try{[Net.ServicePointManager]::SecurityProtocol=[Net.SecurityProtocolType]::Tls12; Invoke-WebRequest -UseBasicParsing -Uri $env:OC_URL -OutFile $env:OC_OUT -TimeoutSec 900}catch{}" >nul 2>&1
+goto :nx_check
+:nx_curl
+curl.exe -L -f -s --max-time 900 --noproxy "*" -o "%NODE_MSI%" "%NODE_MSI_URL%"
+if not errorlevel 1 goto :nx_check
+echo     direct download failed - retrying through the Windows proxy settings...
+"%PSX%" -NoProfile -Command "try{[Net.ServicePointManager]::SecurityProtocol=[Net.SecurityProtocolType]::Tls12; Invoke-WebRequest -UseBasicParsing -Uri $env:OC_URL -OutFile $env:OC_OUT -TimeoutSec 900}catch{}" >nul 2>&1
+REM Restore the proxy variables and check the MSI size.
+:nx_check
+set "HTTP_PROXY=%KEEP_HP%"
+set "HTTPS_PROXY=%KEEP_SP%"
+set "NOK=0"
+if exist "%NODE_MSI%" for %%M in ("%NODE_MSI%") do if not "%%~zM"=="" if %%~zM GTR 1000000 set "NOK=1"
+if not "%NOK%"=="1" goto :node_done
+echo     installing, accept the UAC prompt...
+set "OC_MSI=%NODE_MSI%"
+"%PSX%" -NoProfile -Command "try{Start-Process msiexec.exe -ArgumentList '/i',$env:OC_MSI,'/qn','/norestart' -Verb RunAs -Wait}catch{}" >nul 2>&1
+del /f /q "%NODE_MSI%" >nul 2>&1
+REM Either route: refresh the session PATH with the standard homes.
+:node_done
+set "PATH=%PATH%;%ProgramFiles%\nodejs;%APPDATA%\npm"
+call :have_exe npm
+if "%HAVE%"=="0" echo   [!] node.js is still not available - install the 32-bit build from nodejs.org.
+exit /b 0
 
 REM - locate opencode anywhere reasonable
 REM Collects every candidate (PATH, npm shim, standalone builds), reads the
