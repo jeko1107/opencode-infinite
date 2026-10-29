@@ -1,4 +1,4 @@
-# OpenCode Infinite - launcher handbook (v2.13)
+# OpenCode Infinite - launcher handbook (v2.14)
 
 A single-file Windows batch launcher for OpenCode that adds Cloudflare WARP
 egress rotation, dependency bootstrap, changed-IP auto-resume, watching of
@@ -147,37 +147,32 @@ Install fallback:
    the previous version. A SHA-pinned URL is always the exact bytes of that
    commit. If the API is unreachable, both fall back to the plain main URL,
    so nothing is ever harder than it was.
- - **ESC in the modern folder picker opens the old dialog.** Pressing ESC (or
-   the X) inside the Explorer-style modern picker counts as wanting the
-   classic small dialog: it opens immediately and a cancel there too reaches
-   the usual `Try again? [Y/N]` question.
-  - **`install.log` records which dialog appeared**: `picker: modern dialog
-    starting` / `picker: classic dialog starting` / `picker: modern dialog
-    returned a folder` - so any future "it uses the old one" report is one
-    log read away from a cause.
+ - **ESC/Cancel in the folder dialog is safe.** Closing the picker (ESC, the
+   X, or `Cancel`) reaches the usual `Try again? [Y/N]` question: `Y` reopens
+   it, `N` returns to the menu. Nothing is silently accepted.
+ - **`install.log` records the pick trail**: `picker: dialog starting` /
+   `picker: dialog finished` - so a "it never picked" report is one log read
+   away from a cause.
 
-### NEW in v2.13 - the pick that never picked is fixed
+### NEW in v2.14 - the Windows folder dialog owns the pick
 
-The v2.11/v2.12 modern dialog could appear, accept your click on a folder,
-and still send you to the classic dialog - the pick never left the dialog.
-Cause: the C# interop declared the `IShellItem` COM interface with a
-mistyped GUID (`...4641-BE82...`; the real IID ends `...4655-BE82...`).
-`IFileDialog.GetResult` returns a raw pointer and .NET marshals it back
-through `QueryInterface` with that attribute GUID, so the pick could never
-land: the exception was swallowed and the launcher fell back. v2.13 corrects
-the GUID and stops swallowing: any modern-picker failure appends
-`picker: modern ERROR: <the exception>` to `install.log`.
+v2.14 removes the modern Explorer-style picker for good. The bench and four
+machines proved it and then agreed: the compiled C# interop never returned a
+pick reliably (`pick` -> `nothing from the modern dialog` on every try, with
+no exception to name), while the classic Windows folder dialog open, pick,
+and handed back the path every single time. The launcher now uses that one
+dialog. It opens in `C:\Users\<you>` first-run, remembers the last folder
+you picked, and `Cancel` asks the usual `Try again? [Y/N]`: `Y` reopens the
+dialog, `N` returns to the menu. `install.log` keeps the short trail
+(`picker: dialog starting` / `picker: dialog finished`).
 
-### NEW in v2.11 - modern folder picker, ESC key, no auto-yank after quit
+### NEW in v2.11 - ESC key, no auto-yank after quit
 
 Three fixes to the mouse-and-keyboard side, zero new settings:
 
- - **Folder picker (`[3]`) is modern now.** The launcher compiles a small
-   C# wrapper for the Windows `IFileDialog` (`FOS_PICKFOLDERS`) - the same
-   big Explorer-style dialog modern apps use, with favorites, a search bar
-   and a size grip - and opens it in the last used folder when there is one.
-   If compiling is impossible (hardened AppLocker, stripped .NET), it falls
-   back to the old small dialog automatically, so `[3]` never dies.
+ - **Folder picker (`[3]`) kept its Windows dialog** and gained the
+   remember-last-folder behavior the modern dialog promised (v2.14 later
+   made that the only picker - see its note above). `[3]` never dies.
  - **ESC works in the folder menu.** The folder menu now reads the console
    key directly; ESC exits the launcher, any other key remains `[1]-[4]`, and
    unknown keys just redraw the menu. On redirected stdin (non-interactive
@@ -361,7 +356,7 @@ move "%USERPROFILE%\Desktop\opencode_chats_archiviate\<stamp>\opencode.db" "%USE
 | `deep reset` stops at `nothing to archive` | OpenCode refused to die; kill the process window and repeat |
 | `[upd]` says the repo copy failed to apply | the downloaded copy stays in `%STATE_DIR%\upd_remote.bat`; replace manually |
 | [upd] says the launcher matches the repo right after a release | you hit the stale raw/main CDN window (fixed in v2.12 - the updater now pins the commit SHA). Run [upd] again, or fetch a pinned commit copy with Update launcher.bat |
-| `install.log` has `picker: modern ERROR` | the modern dialog failed instead of pretending: the log names the exception. One real cause existed until v2.13 - a mistyped IShellItem IID made `GetResult` fail right after a successful pick, so the classic dialog opened instead |
+| `install.log` says `picker: nothing from the modern dialog` and the old `picker: modern ...` rows | you are still running pre-v2.14: the modern pick never landed and the launcher opened its fallback. Update with `[upd]` (or `Update launcher.bat`) - v2.14 removed that dialog; the Windows folder picker owns the pick now |
 | `Invoke-WebRequest : positional parameter not found` while installing | you copied the old README one-liner that nests `PowerShell -Command`; PS 5.1 strips the inner quotes and the URL arrives split. Use the one-line install in section 2 (single shell, `Copy-Item`, no nested `-Command`) |
 | first paint shows `Another OpenCode launcher seems to be running. Continue anyway? [Y/N]` | a leftover lock in `%LOCALAPPDATA%\opencode-launcher\lock\` (usually a previous Ctrl+C). `Y` is safe - it is only an anti-double-open warning |
 | `Terminate batch job (Y/N)?` | Windows is asking because Ctrl+C was pressed inside a batch context. Answer no - on a Spanish system the keys are S/N, and pressing N is what keeps the launcher running while S kills it there |
@@ -374,8 +369,8 @@ move "%USERPROFILE%\Desktop\opencode_chats_archiviate\<stamp>\opencode.db" "%USE
 certutil -hashfile "OpenCode Infinite.bat" SHA256
 ```
 
-The v2.13 file hashes to
-`AC8FA226D15A12426B78B395A1E407619D7DAA113CECB0DC1C786687F5DF759F`.
+The v2.14 file hashes to
+`D80AE3DE99CC804ED3192F3B92242E550FACA1168989637BFC6E5EE841FB6BCD`.
 A different hash means you are not on the shipped copy - re-download it
 with the one-line install in section 2. Stale copies usually trace back
 to mid-download truncation, or someone else's half-broken mirror.
