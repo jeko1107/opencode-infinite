@@ -1,32 +1,60 @@
-# OpenCode Infinite - launcher reference
+# OpenCode Infinite — launcher handbook (v2.8)
 
-A single-file Windows batch launcher for OpenCode that adds
-Cloudflare WARP egress rotation, dependency bootstrap and a confirmation-gated reset.
+A single-file Windows batch launcher for OpenCode that adds Cloudflare WARP
+egress rotation, dependency bootstrap, chagned-IP auto-resume, watching of
+fatal errors, an UPD self-updater and a one-click updater bootstrap.
 
 - File: `OpenCode Infinite.bat`
-- Size: 23,249 bytes, 646 lines, CRLF, ASCII only, no BOM
-- SHA-256: `B367EBC6F022E8BB324084441A69D996360466200B188A5B410BC12F7F501955`
-- Target: Windows 10 / 11, x64 or ARM64
-- Admin required: only for the optional WARP install (UAC prompt once). Everything else is user mode.
+- Target: Windows 10 / 11, **x64, ARM64, and x86 (32-bit) via npm + 32-bit node**
+- Admin required: only for optional installs (WARP MSI / node MSI). Everything
+  else runs user-mode, no registry, no services, no scheduled tasks.
 
 ---
 
 ## 1. What problem it solves
 
-Free-tier AI endpoints usually rate-limit **per egress IP** and **per session context**.
-The launcher does three things about that:
+Free-tier AI endpoints rate-limit **per egress IP** and **per session context**.
+The launcher handles that:
 
-1. launches OpenCode with the WARP proxy attached, so the provider sees Cloudflare's exit IP
-   instead of yours;
-2. when a run ends badly (quota line in the log, crash, or you press Ctrl+C), asks WARP for a
-   brand new registration, which yields a different exit IP, then reopens the session;
-3. keeps doing that, one press at a time, until a run goes through.
+1. launches OpenCode with the WARP proxy attached, so the provider sees
+   Cloudflare's exit IP instead of yours;
+2. on a bad run end (quota line in log, crash, Ctrl+C) it drops the WARP
+   registration and requests a new one — which yields a different exit IP —
+   then reopens the same session, no input;
+3. probes every candidate IP with one cheap message on a throwaway session, so
+   burned IPs are skipped (hunt can be unlimited with `IP_FIND_MAX=0`).
 
-It also installs what it needs (WARP, OpenCode) so it can run on a machine that has neither.
+It also installs what it needs (WARP, OpenCode, 32-bit node) so it can start
+from a bare machine.
 
 ---
 
-## 2. Quick start
+## 2. One-command install
+
+**PowerShell / Windows Terminal (recommended):**
+
+```powershell
+iwr "https://raw.githubusercontent.com/jeko1107/opencode-infinite/main/OpenCode%20Infinite.bat" -UseBasicParsing -OutFile "$env:TEMP\oci.bat"; PowerShell -NoProfile -ExecutionPolicy Bypass -Command "[Net.ServicePointManager]::SecurityProtocol=[Net.SecurityProtocolType]::Tls12; $u='https://raw.githubusercontent.com/jeko1107/opencode-infinite/main/OpenCode%20Infinite.bat'; $f=Join-Path $env:USERPROFILE 'Desktop\OpenCode Infinite.bat'; Invoke-WebRequest -UseBasicParsing -Uri $u -OutFile $f;"; & $env:TEMP\oci.bat
+```
+
+`cmd` (one window, classic shell):
+
+```cmd
+powershell -NoProfile -ExecutionPolicy Bypass -Command "[Net.ServicePointManager]::SecurityProtocol=[Net.SecurityProtocolType]::Tls12; Invoke-WebRequest -UseBasicParsing -Uri 'https://raw.githubusercontent.com/jeko1107/opencode-infinite/main/OpenCode%%20Infinite.bat' -OutFile \"%USERPROFILE%\Desktop\OpenCode Infinite.bat\""
+```
+
+After the first run, the launcher verifes itself against the repo on every
+start: if a newer copy is live on `main`, it says so and, with your approval,
+backs itself up and swaps in the new version on a harmless restart — no laps
+to keep provoking your memory.
+
+**If a machine runs an OLD version (no [upd] block):** in the same folder, run
+the repo companion file `Update launcher.bat`; it replaces the old copy
+(Beside, Desktop, or OneDrive-Desktop, first hit) with the current one.
+
+---
+
+## 3. Quick start in the launcher
 
 | How you start it | What happens |
 |---|---|
@@ -35,60 +63,42 @@ It also installs what it needs (WARP, OpenCode) so it can run on a machine that 
 | `OpenCode Infinite.bat "D:\work\project"` | Same, from a shell |
 | `OpenCode Infinite.bat \\server\share` | UNC paths work (`pushd`, not `cd /d`) |
 
-If neither WARP nor OpenCode are installed, the script offers to fetch both. Nothing is
-installed silently and no system PATH is modified permanently.
+If neither WARP nor OpenCode are installed, the script offers both fetches.
+Nothing is installed silently (the UAC prompt is user-visible and once-only).
 
 ---
 
-## 3. Files and folders it uses
+## 4. Files the launcher uses (all paths env-based, no hardcoded users)
 
-| Path | Purpose | Created by |
+| Path | Purpose | Written by |
 |---|---|---|
-| `%USERPROFILE%\.local\share\opencode\` | OpenCode data dir: `opencode.db`, `opencode.db-wal`, `opencode.db-shm`, `auth.json` | OpenCode |
-| `%USERPROFILE%\.local\share\opencode\log\opencode.log` | The log the quota check reads | OpenCode |
-| `%USERPROFILE%\.cache\opencode\` | OpenCode cache, wiped only by Deep reset | OpenCode |
-| `%LOCALAPPDATA%\opencode-launcher\lastfolder.txt` | Remembers the last working folder | This script |
-| `%LOCALAPPDATA%\opencode-launcher\lastip.txt` | Remembers the last egress IP, so `[1]` never reuses it | This script |
-| `%LOCALAPPDATA%\opencode\bin\opencode.exe` | Standalone OpenCode, when installed by this script | This script |
-| `%USERPROFILE%\Desktop\opencode_chats_archiviate\<stamp>\` | Chat archive, only created by `[5] Deep reset` | This script |
-| `%TEMP%\Cloudflare_WARP_x64.msi` | Download scratch, deleted after install | This script |
-| `%TEMP%\opencode-windows.zip` | Download scratch, deleted after extract | This script |
+| `%USERPROFILE%\.local\share\opencode\` | OpenCode data dir | OpenCode |
+| `%LOCALAPPDATA%\opencode-launcher\` | lastfolder, lastip, wcli.log, startup.log, backups | launcher |
+| `%LOCALAPPDATA%\opencode\bin\opencode.exe` | standalone OpenCode install | launcher |
+| `%ProgramFiles%\NodeJS%...` | node 32-bit (WSL/via winget/MSI) | launcher instruction |
+| `%USERPROFILE%\Desktop\opencode_chats_archiv\<stamp>\` | deep-reset archive | launcher |
+| `%TEMP%\Cloudflare_WARP_x64.msi`, `%TEMP%\node_x86.msi` | installer scratch, deleted after use | launcher |
+| `%STATE_DIR%\lock\` | single-instance JIT | launcher |
+
+No `C:\Users\<name>` strings live anywhere in the file; everything routes via
+environment variables, which is what keeps it universal.
 
 ---
 
-## 4. Flow at a glance
+## 5. The main menu
 
-```
-start
-  -> pick a working folder        (drag, argument, or folder menu)
-  -> find WARP                    (optional, offers install)
-  -> find OpenCode                (optional, offers install)
-  -> main menu
-       [1] Fresh start   -> rotate if the IP repeats, then launch
-       [2] Continue      -> launch as-is
-       [3] Change IP     -> rotate only, back to menu
-       [4] Folder        -> change working folder
-       [5] Deep reset    -> confirm, archive chats, wipe tokens, new session
-       [6] Exit
-  -> OpenCode runs
-  -> it exits
-       crash ................ rotate + reopen, no prompt
-       quota line in log .... rotate + reopen, no prompt
-       clean exit ........... 5 s window: [Y] rotate + reopen (default), [N] menu
-```
+| Key | Option | What it touches |
+|---|---|---|
+| `[1]` | Fresh start | new IP (ensure-different) + open a new session |
+| `[2]` | Continue | same IP, same session |
+| `[3]` | Change IP | rotates the WARP exit IP, back to menu |
+| `[4]` | Folder | change working folder |
+| `[5]` | Deep reset | kill OpenCode, archive chats to the Desktop, clear tokens, fresh session |
+| `[6]` | Exit | closes the lock and leaves |
 
----
-
-## 5. Folder menu
-
-| Key | Action |
-|---|---|
-| `[1]` | Reopen the last folder (disabled with a message if nothing is saved yet) |
-| `[2]` | Use the folder the `.bat` is sitting in |
-| `[3]` | Windows folder picker (`FolderBrowserDialog`) |
-| `[4]` | Exit |
-
-The chosen folder is written to `lastfolder.txt` and the window title is set to `OpenCode`.
+After **any** run exit, the launcher checks the log and, if this IP is dead:
+rotates and reopens the session automatically. Full cycle needs **one Ctrl+C
+and one keystroke** between IPs.
 
 ---
 
@@ -96,310 +106,200 @@ The chosen folder is written to `lastfolder.txt` and the window title is set to 
 
 ### WARP (optional)
 
-Search order for `warp-cli.exe`:
+Search order in `:find_warp`:
 
 1. `where warp-cli.exe`
 2. `%ProgramFiles%\Cloudflare\Cloudflare WARP\`
-3. `%ProgramW6432%\Cloudflare\Cloudflare WARP\` (skipped on 32-bit Windows)
-4. `%ProgramFiles(x86)%\Cloudflare\Cloudflare WARP\`
+3. `%ProgramFiles(x86)%\Cloudflare\Cloudflare WARP\`
+4. `%ProgramW6432%\Cloudflare\Cloudflare WARP\`
 5. `%LOCALAPPDATA%\Cloudflare\Cloudflare WARP\`
 
-If not found, the menu offers a download:
+WARP install (`:install_warp`) downloads 64-bit MSI from
+`downloads.cloudflareclient.com`, size gate 5 MB, silent install with UAC.
+**x86 note:** WARP publishes 64-bit only; on real 32-bit Windows the rotation
+is disabled but everything else runs from the direct connection.
 
-- URL: `https://downloads.cloudflareclient.com/v1/download/windows/ga`
-  (redirects to the current release; the old `1.1.1.1/Cloudflare_WARP_x64.msi` path is dead)
-- Download goes out with `--noproxy "*"`, because the proxy it configures later is WARP itself
-  and nothing is listening on port 40000 yet.
-- The download is validated **by size, not by exit code**: anything at or below 5 MB is
-  rejected, so an HTML error page can never be installed as an MSI.
-- Install runs `msiexec /i ... /qn` elevated. One UAC prompt.
+### OpenCode (any install shape)
 
-Without WARP the launcher still works: no rotation, no proxy, everything else identical.
+Search order in `:find_opencode` — all candidates are versioned and the
+newest WIN (old v1-vs-v2 database mismatch reported instead of failing):
 
-### OpenCode
-
-Search order in `:find_opencode`:
-
-1. `where opencode.exe`, then `.cmd`, then `.bat` (extension order matters: npm installs ship a
-   `.cmd` shim next to a `.ps1`)
-2. `%APPDATA%\npm\opencode.cmd`
+1. PATH lookup (opencode.exe / .cmd / .bat)
+2. `%APPDATA%\npm\opencode.cmd` — npm shim
 3. `%LOCALAPPDATA%\Programs\opencode\opencode.exe`
-4. `%LOCALAPPDATA%\opencode\bin\opencode.exe` (installed by this script)
+4. `%LOCALAPPDATA%\opencode\bin\opencode.exe` — standalone install by this script
 5. `%USERPROFILE%\.opencode\bin\opencode.exe`
 
-If nothing is found:
+Install fallback:
 
-- **npm present** -> `npm install -g opencode-ai`. If that does not produce a runnable binary,
-  it falls through to the standalone build instead of failing.
-- **npm absent** -> straight to the standalone build.
-- Standalone URL: `https://github.com/sst/opencode/releases/latest/download/opencode-windows-<arch>.zip`
-  with `<arch>` = `x64`, or `arm64` when `%PROCESSOR_ARCHITECTURE%` is `ARM64`.
-- Same download rules as WARP: `--noproxy "*"`, `-f`, 5 MB size gate, then `Expand-Archive`
-  into `%LOCALAPPDATA%\opencode\bin` and that folder is appended to `PATH` for this session.
+> npm present → `npm install -g opencode-ai`
+> npm absent → standalone build from GitHub releases (x64 or arm64)
 
-No Node.js, no Scoop, no package manager and no admin are required for the standalone route.
+### NEW in v2.8 — 32-bit Windows (x86) support
+
+OpenCode publishes no x86 binary. On real 32-bit Windows the script goes:
+bootstrap **32-bit node.js** first, then install OpenCode from npm.
+
+- `:install_node_x86`:
+  1. `winget install OpenJS.NodeJS.LTS` (10-min cap, silent)
+  2. winget missing → pinned **nodejs.org v22 LTS x86 MSI** with the same
+     size gate, Windows-proxy fallback, silent `/qn /norestart` after UAC
+  3. PATH refresh, npm verification
+- Then: `npm install -g opencode-ai`, the version lookup runs again.
+
+### Downloads in v2.7+ — proxy fallback
+
+Every download sites (self-update, WARP MSI, OpenCode zip, node MSI) tries:
+
+1. direct `curl -f --noproxy "*"` first
+2. if egress is blocked (firewalls, transparent proxies) → PowerShell
+   `Invoke-WebRequest`, which reads the **Windows system proxy settings**
+   itself, so it succeeds wherever the browser-level network works.
+
+Size gates and header markers make it impossible for an HTML error page,
+truncated file, or wrong resource to slip in.
 
 ---
 
-## 7. Main menu
+## 7. PID-tracked TUI and the watcher
 
-| Key | Option | Files touched | Rotation |
-|---|---|---|---|
-| `[1]` | Fresh start | none | asks WARP for a new IP if the stored one repeats, then launches |
-| `[2]` | Continue | none | none |
-| `[3]` | Change IP | none | rotates, shows the new IP, back to menu |
-| `[4]` | Folder | writes `lastfolder.txt` | none |
-| `[5]` | Deep reset | **yes**, after `[Y/N]` | rotates as part of the reset |
-| `[6]` | Exit | none | none |
-
-The header of the menu shows the working folder and the current exit IP, measured through the
-WARP proxy when the tunnel is up.
+- **`:launch`** spawns OpenCode inside the launcher's console through a tiny
+  PowerShell host; its exact PID is written to `tui.pid` so the watcher can
+  kill precisely the tree it owns (works for .exe, .cmd shim, and .bat alike).
+  PS 5.1 nuance handled: an empty `-ArgumentList` is rejected, so the fresh
+  start path (no flags) calls `Start-Process` without the parameter.
+- **`:watch_start`** — background watcher tails `opencode.log` from the
+  pre-launch byte offset every 2s looking for
+  `Failed to drain Session / free usage limit / rate limit / ...`. It waits
+  4 seconds and only kills the TUI if no INFO/DEBUG recovery lines arrived —
+  so a self-healing stream never gets murdered. Only a stuck chat dies.
+- **`:resume_run`** — resume message with hard `RESUME_TIMEOUT`, captured out
+  and err files, `--standalone` server born under THIS proxy env (the old
+  background server still holds the dead tunnel's sockets otherwise).
+- Quota/fatal errors on the new IP cause **another rotation**, full auto.
 
 ---
 
-## 8. Rotation engine
+## 8. `wcli.log` — every warp-cli failure with the daemon's own words
 
-Three call sites share the same primitives.
+`:wcli` wraps all warp-cli calls with a 15s cap, captures stdout+stderr, and
+on failure logs a line like:
 
-**`:getip`** - reads `https://www.cloudflare.com/cdn-cgi/trace` and takes the `ip=` field.
-Forces IPv4 with `-4`; tries through the proxy first, falls back to a direct request. 10 s cap.
+```
+2026-10-29T08:48:09+01:00 exit 1: --accept-tos registration new :: Registration missing
+```
 
-**`:warp_up`** - `warp-cli --accept-tos mode proxy`, then `--accept-tos connect`.
+So instead of a flood of unreadable `exit 1`, the daemon says its reason
+directly (`Old registration is still around`, `Unable to reach the API`,
+`Registration missing`, `unrecognized subcommand`, ...).
 
-**The rotation itself** - `disconnect`, then `registration new`, then `warp_up`, then wait
-`WARP_WAIT` seconds and measure again. `registration new` is the part that actually changes the
-exit IP; a plain reconnect usually returns the same address.
+---
 
-| Call site | Tries | On failure |
+## 9. Self-update (`[upd]`)
+
+On every start, before anything interactive:
+
+1. newest script is fetched from
+   `raw.githubusercontent.com/jeko1107/opencode-infinite/main/OpenCode%20Infinite.bat`
+   (30s cap, direct first, Windows proxy fallback)
+2. size ≥ 20 KB + `REM  OpenCode launcher` header gate (no HTML pages, no
+   wrong resources)
+3. version strings from `(vX.Y)` compared with the running file
+4. equal → one clean line `[upd] launcher matches the repo`. Different →
+   `[upd] update found: local v… - repo v…` and a `[Y/N]` prompt.
+5. On `Y`: backup to `%STATE_DIR%\OpenCode Infinite backup <ver>.bat`, then a
+   tiny helper waits for this cmd to release the .bat, swaps the new one in,
+   restarts. The main script exits before anything reads the swapped file.
+
+The check is silent when offline or when the repo is unreachable.
+
+---
+
+## 10. Deep reset (`[5]`)
+
+The only option that touches user files, and it asks first.
+
+1. stop OpenCode (`service stop` then `taskkill` on its oldes
+   PIDs; the database must be lockable)
+2. archive `opencode.db`, `.db-wal`, `.db-shm`, and `storage\` into
+   `Desktop\opencode_chats_archiv\<yyyyMMdd-HHmmss>\` — **robocopy /e /move
+   across volumes, nothing overwritten**
+3. clear tokens (`%USERPROFILE%\.cache\opencode\` + `auth.json`)
+4. start a fresh session with the synth header variables set
+
+Desktop detection uses `GetFolderPath('Desktop')` first, with fallbacks
+(`OneDrive\Desktop`, `OneDrive\Escritorio`, `%USERPROFILE%\Desktop`).
+
+### Restoring
+
+```
+move "%USERPROFILE%\Desktop\opencode_chats_archiv\<stamp>\opencode.db" "%USERPROFILE%\.local\share\opencode\"
+```
+
+---
+
+## 11. Settings (top of file, edit freely)
+
+| Variable | Default | Meaning |
 |---|---|---|
-| `[1] Fresh start` (`:ensure_new_ip`) | up to `ROTATE_TRIES_MAX` (4) | launches anyway on the current IP, with a message |
-| `[3] Change IP` (`:rotate`) | one | shows the IP it got |
-| after a run (`:auto_rotate`) | up to `ROTATE_TRIES_MAX` (4) | stops and returns to the menu |
-
-A rotation that succeeds reopens OpenCode immediately with `--continue`, so the same
-conversation comes back on the new IP.
-
----
-
-## 9. Quota detection
-
-After OpenCode exits with code 0, `:check_quota` reads **only the bytes written during this run**:
-
-1. `SIZE_BEFORE` is the log size captured just before launch.
-2. PowerShell opens the log, seeks to `SIZE_BEFORE`, reads to the end.
-3. It looks for the exact string `free usage limit` (case-insensitive).
-   That is what OpenCode writes: `AI.Error: Free usage limit reached`.
-4. `HIT` / `NOHIT` goes to a temp file, which is read back and deleted.
-
-Why the byte offset: the log is append-only and can be megabytes long. Without the offset, one
-old quota line would trigger a rotation on every future launch.
-
-Why the exact string: broader patterns like `quota` or `rate limit` appear in unrelated log
-lines (MCP servers, tunnels) and would cause pointless rotations.
-
-Note: this check runs **after** OpenCode exits. It does not watch the log live.
+| `ROTATE_TRIES_MAX` | `4` | infrastructure rotation attempts |
+| `IP_FIND_MAX` | `0` | hunt-limit: 0 = until one works (Ctrl+C stops) |
+| `WARP_WAIT` | `6` s | settle time after reconnect |
+| `WARP_CALL_TIMEOUT` | `15` s | one warp-cli call cap |
+| `WHERE_TIMEOUT` | `5` s | one `where` lookup cap |
+| `WATCH` | `1` | log watcher on/off |
+| `RESUME_MSG` | `continue` | auto-message for resume |
+| `RESUME_AUTO` | `1` | auto-approve tool permissions during resume |
+| `RESUME_TIMEOUT` | `90` s | hard cap on the resume message |
+| `PROBE_MODEL` | `opencode/deepseek-v4.1-flash-free` | cheap model for the IP probe |
+| `PROBE` | `1` | probe candidate IPs |
+| `UPDATE_CHECK` | `1` | [upd] self-update on start |
+| `PROXY_PORT` | `40000` | WARP local proxy port |
 
 ---
 
-## 10. Ctrl+C behaviour
+## 12. Compatibility notes
 
-OpenCode exits when you press Ctrl+C. The launcher reacts to that exit:
+- ASCII-only file, CRLF, no BOM — same behavior in any code page;
+  no `C:\Users` strings anywhere; all paths via environment.
+- Windows 10 ≥1803 (with `curl.exe`) → full support. On older builds the
+  PowerShell fallback covers everything needed.
+- PowerShell 5.1 (System32) — the launcher never depends on a different
+  install; `PSX` is absolute.
+- x64 + arm64 native. **x86**: no WARP, but OpenCode runs (npm + 32-bit node).
+- Any current WARP GA (2023.3+ command set). Old warp-cli → readable reason
+  in wcli.log instead of silent failure.
+- opencode v2 (winget, npm, standalone, portable) — chosen by newest version;
+  v1-with-v2-DB is detected and reported, not run.
 
-| Exit condition | What the launcher does |
+---
+
+## 13. Troubleshooting
+
+| Symptom | Fix |
 |---|---|
-| Non-zero exit code | `OpenCode exited with code N` -> rotate -> reopen, no prompt |
-| Exit 0, quota line in this run's log | `Free quota reached on this IP` -> rotate -> reopen, no prompt |
-| Exit 0, clean log | 5 second window: `[Y]` (default) rotate and reopen, `[N]` back to the menu |
-
-The 5 second window is `choice /c yn /n /t 5 /d y`. With no key pressed, `choice` returns the
-default (`Y`) and rotation proceeds, so one Ctrl+C is one new IP without any further input.
-Pressing `N` is the way out of the loop.
-
-Each launch after a rotation clears `RESUME`, then sets it again, so the relaunch uses
-`--continue`: history survives the rotation.
+| `Start-Process : El argumento es NULL` at fresh start | you are on pre-v2.6; run `Update launcher.bat` once in that folder |
+| `wcli.log` full of `exit 1` with NO reason | pre-v2.6 also; v2.6+ prints the daemon's message |
+| downloads fail everywhere (MSI/zip/self-update) | v2.7+ retries through Windows proxy; check the printed URLs in a browser |
+| `IP already burned, rotating` loops | free-tier quota; Ctrl+C stops the hunt |
+| `deep reset` stops at `nothing to archive` | OpenCode refused to die; kill the process window and repeat |
+| `[upd]` says the repo copy failed to apply | the downloaded copy stays in `%STATE_DIR%\upd_remote.bat`; replace manually |
 
 ---
 
-## 11. Proxy handling
-
-The proxy is **not** exported at startup. If it were, every download would be sent to
-`127.0.0.1:40000` before WARP exists, and nothing listens there.
-
-`:export_proxy` runs immediately before `call "%OC_CMD%"` and does this:
-
-1. If WARP is not present, export nothing.
-2. Probe the proxy with one real HTTPS request through it
-   (`curl --max-time 5 --noproxy "" --proxy http://127.0.0.1:40000`).
-   Without curl, fall back to a 1.5 s TCP connect via PowerShell.
-3. If the probe fails, **do not export** and print
-   `[!] WARP proxy is not answering - using the direct connection.`
-4. Only then set `HTTP_PROXY`, `HTTPS_PROXY` and `no_proxy`.
-
-This is what prevents the `ECONNRESET` storm: a `warp-cli.exe` on disk is not proof of a
-working tunnel, and a dead proxy that accepts connections and then resets them is worse than
-no proxy at all.
-
-`no_proxy` is set to `localhost,127.0.0.1,0.0.0.0`.
-
----
-
-## 12. Deep reset (`[5]`)
-
-The only option that touches user files, and it asks first:
-`Do that now? [Y/N]` - `N` returns to the menu without a single write.
-
-When confirmed:
-
-1. **`:stop_opencode`** - `opencode service stop`, then `taskkill /f` on `OpenCode.exe`,
-   `opencode.exe`, `opencode-cli.exe`. The database is locked while OpenCode runs, so this is
-   required before moving it.
-2. **`:deep_archive`** - moves `storage\` (if it exists), `opencode.db`, `opencode.db-wal`,
-   `opencode.db-shm` into
-   `Desktop\opencode_chats_archiviate\<yyyyMMdd-HHmmss>\`.
-   The timestamp makes every archive unique; nothing is ever overwritten. If there was nothing
-   to move, the empty folder is removed again.
-3. **`:clear_tokens`** - deletes `%USERPROFILE%\.cache\opencode\` and
-   `%USERPROFILE%\.local\share\opencode\auth.json`.
-   This is a real deletion: you will have to sign in to your provider again.
-4. **`:prime_spoof`** - sets the three variables the original Discord script used.
-5. Starts OpenCode on a new session (no `--continue`).
-
-Desktop detection uses `[Environment]::GetFolderPath('Desktop')` first, because OneDrive
-redirection and non-English profile names break the naive `%USERPROFILE%\Desktop` assumption.
-It falls back to `OneDrive\Escritorio`, `OneDrive\Desktop`, `Desktop`, then `%USERPROFILE%`.
-
-### Restoring an archive
-
-```
-move "%USERPROFILE%\Desktop\opencode_chats_archiviate\20261027-192335\opencode.db" "%USERPROFILE%\.local\share\opencode\"
-```
-
-Do the same for `opencode.db-wal` and `opencode.db-shm` if they were archived. Open OpenCode
-afterwards and the sessions are back.
-
----
-
-## 13. The promise: options 1-4 touch nothing
-
-`[1]`, `[2]`, `[3]` and `[4]` contain no `move`, no `del`, no `rmdir` and no `taskkill`.
-This is enforced, not just claimed: a static checker walks the whole `:run` block and fails if
-any of those verbs appears in it.
-
-Every `move` in the file lives inside `:deep_archive`, every `taskkill` inside `:stop_opencode`,
-every `rmdir` in the reset path. The only `del` calls remove temp downloads, the temp quota
-file, and the tokens during a reset.
-
----
-
-## 14. Settings you can edit
-
-Top of the file, section `settings (edit freely)`:
-
-| Variable | Default | Meaning |
-|---|---|---|
-| `ROTATE_TRIES_MAX` | `4` | Rotation attempts before giving up and staying on the current IP |
-| `WARP_WAIT` | `6` | Seconds to wait after a WARP reconnect before measuring the IP |
-
-Internal, change only if you know why:
-
-| Variable | Default | Meaning |
-|---|---|---|
-| `PROXY_PORT` | `40000` | WARP local proxy port, used to build `PROXY` |
-| `TRACE_URL` | `cloudflare.com/cdn-cgi/trace` | Where the exit IP is read from |
-| `WARP_MSI_URL` | `downloads.cloudflareclient.com/.../ga` | WARP installer URL |
-| `NO_PROXY` | `localhost,127.0.0.1,0.0.0.0` | Exclusions handed to the child |
-
----
-
-## 15. Environment handed to OpenCode
-
-| Variable | When | Value |
-|---|---|---|
-| `HTTP_PROXY` | only if the proxy probe succeeded | `http://127.0.0.1:40000` |
-| `HTTPS_PROXY` | same | `http://127.0.0.1:40000` |
-| `no_proxy` | same | `localhost,127.0.0.1,0.0.0.0` |
-| `OPENCODE_SYNTHESIZE_CLI_HEADERS` | after Deep reset | `true` |
-| `OPENCODE_CLIENT_UA` | after Deep reset | `opencode/1.18.25` |
-| `OPENCODE_SESSION_ID` | after Deep reset | `msg_<random>` |
-
-Command line: `--continue` when resuming after a rotation, nothing otherwise.
-
----
-
-## 16. Compatibility notes
-
-- **ASCII only.** No accents, no BOM, CRLF. This is why the same file renders identically on
-  any Windows locale; accented `echo` lines break under a different code page.
-- **`pushd` for folders**, not `cd /d`, so UNC paths work.
-- **`call "%OC_CMD%"`**, not `"%OC_CMD%"`: npm installs OpenCode as a `.cmd` shim and calling it
-  directly would terminate the batch.
-- **PowerShell by absolute path** (`%PSX%`) for every helper call, so a broken `PATH` cannot
-  silently turn into a no-op.
-- **curl** is used when present (Windows 10 1803+), PowerShell otherwise.
-- **No admin, no services, no scheduled tasks, no registry writes.** The only elevated step is
-  the optional WARP MSI install.
-
----
-
-## 17. Troubleshooting
-
-| Symptom | Cause | Fix |
-|---|---|---|
-| `Retry due - ECONNRESET` inside OpenCode | A model stream was cut mid-response (provider congestion, CDN, antivirus, VPN). Not the launcher. | Press Ctrl+C and let the launcher rotate; if it repeats on every model, check antivirus HTTPS inspection |
-| `AI.Error: Free usage limit reached` | Per-IP free quota exhausted | Ctrl+C -> the launcher rotates and reopens |
-| `[!] WARP proxy is not answering` | WARP binary exists but the tunnel is down | The run continues on the direct connection; restart WARP for rotation |
-| `[auto-install] npm did not deliver it, going standalone` | npm present but `opencode-ai` did not install | Nothing to do, the standalone build takes over |
-| `[!] download failed` with a URL below | Network blocked the release host, or a proxy interfered | Open the printed URL in a browser and install by hand |
-| `[!] Cloudflare WARP not found` | WARP not installed | Accept the install offer, or install from 1.1.1.1 |
-| Rotation says `same IP every time` | WARP refused to hand out a new address | Wait and retry later; the launcher stops instead of looping forever |
-| `Terminate batch job (Y/N)?` after Ctrl+C | Windows asking if the script itself should die | Answer `N` so the rotation can run |
-
----
-
-## 18. Known limits
-
-- The rotation cannot be verified from a session that itself egresses through WARP: running
-  `registration new` kills that session's own tunnel mid-answer. What is verified is the logic,
-  not the physical IP change.
-- The quota check only evaluates **after** OpenCode exits; it never watches the log live.
-- The `Retry due` banner is a TUI string and is **not** written to `opencode.log`; that is why
-  the trigger is the exit itself, not a log pattern. The only network errors that appear in the
-  log are local service restarts, which would cause false rotations.
-- Deep reset needs OpenCode to be closable; if the process refuses to die, the database stays
-  locked and the move fails with `nothing to archive`.
-
----
-
-## 19. Verifying the file yourself
+## 14. Verify the file
 
 ```
 certutil -hashfile "OpenCode Infinite.bat" SHA256
 ```
 
-Expect `b367ebc6f022e8bb324084441a69d996360466200b188a5b410bc12f7f501955`.
-
-Quick structural checks with Notepad or `findstr`:
+Quick structural checks with findstr:
 
 ```
-findstr /n ":proxy_ok" "OpenCode Infinite.bat"
-findstr /n ":deep_archive" "OpenCode Infinite.bat"
-findstr /n "PROXY_PORT" "OpenCode Infinite.bat"
+findstr /n "self_update" "OpenCode Infinite.bat"
+findstr /n "install_node_x86" "OpenCode Infinite.bat"
+findstr /n "UPDATE_URL" "OpenCode Infinite.bat"
 ```
 
 ---
-
-## 20. Build fingerprint
-
-| Field | Value |
-|---|---|
-| Bytes | 23,249 |
-| Lines | 646 |
-| Encoding | ASCII, CRLF, no BOM |
-| SHA-256 | `B367EBC6F022E8BB324084441A69D996360466200B188A5B410BC12F7F501955` |
-| Static assertions | 56 passing |
-| Sandbox assertions | 34 passing |
-
-Sandbox tests include byte-identical checks that `opencode.db`, `opencode.db-wal`,
-`opencode.db-shm` and `auth.json` are unchanged after every subroutine that is not the reset,
-and that a simulated Deep reset archives inside the sandbox without ever touching the real
-Desktop.
+**jeko1107** · https://github.com/jeko1107/opencode-infinite · launcher lives and keeps itself current.
