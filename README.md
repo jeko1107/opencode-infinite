@@ -1,4 +1,4 @@
-# OpenCode Infinite - launcher handbook (v2.11)
+# OpenCode Infinite - launcher handbook (v2.12)
 
 A single-file Windows batch launcher for OpenCode that adds Cloudflare WARP
 egress rotation, dependency bootstrap, changed-IP auto-resume, watching of
@@ -137,25 +137,44 @@ Install fallback:
 > npm present -> `npm install -g opencode-ai`
 > npm absent -> standalone build from GitHub releases (x64 or arm64)
 
+### NEW in v2.12 - update channel is CDN-proof, picker ESC chain, picker logs
+
+ - **`[upd]` and `Update launcher.bat` pin the exact commit.** Both now ask
+   the GitHub API for the newest SHA on `main` and download
+   `raw.githubusercontent.com/jeko1107/opencode-infinite/<SHA>/OpenCode%20Infinite.bat`.
+   A raw/main URL can serve a stale CDN copy for minutes after a push - that
+   is exactly why someone running `[upd]` right after a release could stay on
+   the previous version. A SHA-pinned URL is always the exact bytes of that
+   commit. If the API is unreachable, both fall back to the plain main URL,
+   so nothing is ever harder than it was.
+ - **ESC in the modern folder picker opens the old dialog.** Pressing ESC (or
+   the X) inside the Explorer-style modern picker counts as wanting the
+   classic small dialog: it opens immediately and a cancel there too reaches
+   the usual `Try again? [Y/N]` question.
+ - **`install.log` records which dialog appeared**: `picker: modern dialog
+   starting` / `picker: classic dialog starting` / `picker: modern dialog
+   returned a folder` - so any future "it uses the old one" report is one
+   log read away from a cause.
+
 ### NEW in v2.11 - modern folder picker, ESC key, no auto-yank after quit
 
 Three fixes to the mouse-and-keyboard side, zero new settings:
 
- - **Folder picker ([3]) is modern now.** The launcher compiles a small
-   C# wrapper for the Windows IFileDialog (FOS_PICKFOLDERS) - the same
+ - **Folder picker (`[3]`) is modern now.** The launcher compiles a small
+   C# wrapper for the Windows `IFileDialog` (`FOS_PICKFOLDERS`) - the same
    big Explorer-style dialog modern apps use, with favorites, a search bar
    and a size grip - and opens it in the last used folder when there is one.
    If compiling is impossible (hardened AppLocker, stripped .NET), it falls
-   back to the old small dialog automatically, so [3] never dies.
+   back to the old small dialog automatically, so `[3]` never dies.
  - **ESC works in the folder menu.** The folder menu now reads the console
-   key directly; ESC exits the launcher, any other key remains [1]-[4], and
+   key directly; ESC exits the launcher, any other key remains `[1]-[4]`, and
    unknown keys just redraw the menu. On redirected stdin (non-interactive
-   consoles) it falls back to the classic choice line, so piped flows are
+   consoles) it falls back to the classic `choice` line, so piped flows are
    untouched.
  - **ESC no longer yanks you back.** Pressing ESC inside OpenCode quits it -
    that is OpenCode's own keymap and cannot be changed by the launcher. But
-   when OpenCode closes, the old 5-second choice /d y auto-relaunched the
-   session right away. The default is N in v2.11: a clean quit lands in
+   when OpenCode closes, the old 5-second `choice /d y` auto-relaunched the
+   session right away. The default is `N` in v2.11: a clean quit lands in
    the menu; press Y within the 5s window if you want the IP + resume
    (the automatic rotation paths keep their behavior).
 
@@ -329,6 +348,7 @@ move "%USERPROFILE%\Desktop\opencode_chats_archiviate\<stamp>\opencode.db" "%USE
 | `IP already burned, rotating` loops | free-tier quota; Ctrl+C stops the hunt |
 | `deep reset` stops at `nothing to archive` | OpenCode refused to die; kill the process window and repeat |
 | `[upd]` says the repo copy failed to apply | the downloaded copy stays in `%STATE_DIR%\upd_remote.bat`; replace manually |
+| [upd] says the launcher matches the repo right after a release | you hit the stale raw/main CDN window (fixed in v2.12 - the updater now pins the commit SHA). Run [upd] again, or fetch a pinned commit copy with Update launcher.bat |
 | `Invoke-WebRequest : positional parameter not found` while installing | you copied the old README one-liner that nests `PowerShell -Command`; PS 5.1 strips the inner quotes and the URL arrives split. Use the one-line install in section 2 (single shell, `Copy-Item`, no nested `-Command`) |
 | first paint shows `Another OpenCode launcher seems to be running. Continue anyway? [Y/N]` | a leftover lock in `%LOCALAPPDATA%\opencode-launcher\lock\` (usually a previous Ctrl+C). `Y` is safe - it is only an anti-double-open warning |
 | `Terminate batch job (Y/N)?` | Windows is asking because Ctrl+C was pressed inside a batch context. Answer no - on a Spanish system the keys are S/N, and pressing N is what keeps the launcher running while S kills it there |
@@ -341,8 +361,8 @@ move "%USERPROFILE%\Desktop\opencode_chats_archiviate\<stamp>\opencode.db" "%USE
 certutil -hashfile "OpenCode Infinite.bat" SHA256
 ```
 
-The v2.11 file hashes to
-`6B22C351978375174717961B11E03C04E5FCD3EB623279AE26414E111DF94E4F`.
+The v2.12 file hashes to
+`916045230F8E7A29DC16625167653496C630698F39EC0EA4032C84042E782AD6`.
 A different hash means you are not on the shipped copy - re-download it
 with the one-line install in section 2. Stale copies usually trace back
 to mid-download truncation, or someone else's half-broken mirror.

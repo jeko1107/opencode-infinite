@@ -2,13 +2,13 @@
 setlocal EnableExtensions
 title OpenCode
 REM ============================================================
-REM  OpenCode launcher  (v2.11)
+REM  OpenCode launcher  (v2.12)
 REM  WARP egress rotation + dependency bootstrap + auto-resume.
 REM
 REM  Usage:
 REM    double-click                          -> folder menu
 REM    drag a folder onto this file          -> opens in that folder
-REM    "OpenCode Infinite v2.11.bat" "D:\work\project"
+REM    "OpenCode Infinite v2.12.bat" "D:\work\project"
 REM                                          -> opens in that folder
 REM
 REM  This script never moves, renames or deletes your chats, your
@@ -287,9 +287,11 @@ set "OPFOLDER=%CD%"
 goto :folder_ok
 
 REM Option 3: open a Windows folder-picker dialog through PowerShell.
-REM v2.11: modern Explorer-style dialog (IFileDialog, FOS_PICKFOLDERS) with
-REM favorites and a search bar, opened in the last used folder. The classic
-REM small dialog stays as the automatic fallback for locked-down systems.
+REM v2.12: modern Explorer-style dialog (IFileDialog, FOS_PICKFOLDERS) with
+REM favorites and a search bar, opened in the last used folder. ESC or X on
+REM the modern dialog counts as a request for the classic dialog: the small
+REM one opens right after, and cancelling it too reaches the retry question.
+REM Every hop lands in install.log so the picked dialog is always visible.
 :pick_folder
 echo.
 echo   Choose a folder in the dialog...
@@ -306,10 +308,17 @@ if defined LASTPATH set "OC_START=%LASTPATH%"
 REM The C# block rides in base64 so cmd never touches its braces or quotes.
 set "OC_B64="
 set "OC_B64=dXNpbmcgU3lzdGVtOwp1c2luZyBTeXN0ZW0uUnVudGltZS5JbnRlcm9wU2VydmljZXM7CnB1YmxpYyBjbGFzcyBNb2Rlcm5Gb2xkZXJQaWNrZXIKewogICAgW1N0cnVjdExheW91dChMYXlvdXRLaW5kLlNlcXVlbnRpYWwsIENoYXJTZXQgPSBDaGFyU2V0LlVuaWNvZGUpXQogICAgcHVibGljIHN0cnVjdCBDT01ETEdfRklMVEVSU1BFQwogICAgewogICAgICAgIHB1YmxpYyBzdHJpbmcgbmFtZTsKICAgICAgICBwdWJsaWMgc3RyaW5nIHNwZWM7CiAgICB9CiAgICBjb25zdCB1aW50IEZPU19QSUNLRk9MREVSUyA9IDB4MjA7CiAgICBjb25zdCB1aW50IEZPU19GT1JDRUZJTEVTWVNURU0gPSAweDQwOwogICAgY29uc3QgdWludCBDTFNDVFhfSU5QUk9DX1NFUlZFUiA9IDB4MTsKICAgIHN0YXRpYyByZWFkb25seSBHdWlkIENMU0lEX0ZpbGVPcGVuRGlhbG9nID0gbmV3IEd1aWQoIkRDMUM1QTlDLUU4OEEtNERERS1BNUExLTYwRjgyQTIwQUVGNyIpOwogICAgc3RhdGljIHJlYWRvbmx5IEd1aWQgSUlEX0lGaWxlT3BlbkRpYWxvZyA9IG5ldyBHdWlkKCJENTdDNzI4OC1ENEFELTQ3NjgtQkUwMi05RDk2OTUzMkQ5NjAiKTsKICAgIHN0YXRpYyByZWFkb25seSBHdWlkIEJISURfU0ZVSURlc2t0b3AgPSBuZXcgR3VpZCgiezM5ODFlMjIyLWY5MTgtNGI5ZC1iMzFjLTA3ZGM5NjA5MGEyYn0iKTsKICAgIFtDb21JbXBvcnRdCiAgICBbR3VpZCgiNDM4MjZEOTMtRTI0My00NjQxLUJFODItMDRDODZEMDgzRjdEIildCiAgICBbSW50ZXJmYWNlVHlwZShDb21JbnRlcmZhY2VUeXBlLkludGVyZmFjZUlzSVVua25vd24pXQogICAgcHJpdmF0ZSBpbnRlcmZhY2UgSVNoZWxsSXRlbQogICAgewogICAgICAgIHZvaWQgQmluZFRvSGFuZGxlcihJbnRQdHIgcGJjLCByZWYgR3VpZCBiaGlkLCByZWYgR3VpZCByaWlkLCBvdXQgSW50UHRyIHBwdik7CiAgICAgICAgdm9pZCBHZXRQYXJlbnQob3V0IElTaGVsbEl0ZW0gcHBzaSk7CiAgICAgICAgdm9pZCBHZXREaXNwbGF5TmFtZSh1aW50IHNpZ2RuTmFtZSwgW01hcnNoYWxBcyhVbm1hbmFnZWRUeXBlLkxQV1N0cildIG91dCBzdHJpbmcgcHBzek5hbWUpOwogICAgICAgIHZvaWQgR2V0QXR0cmlidXRlcyh1aW50IHNmZ2FvSW4sIG91dCB1aW50IHBzZmdhb0F0dHJpYnMpOwogICAgICAgIHZvaWQgQ29tcGFyZShJU2hlbGxJdGVtIHBzaSwgdWludCBoaW50LCBvdXQgaW50IHBpT3JkZXIpOwogICAgfQogICAgW0NvbUltcG9ydF0KICAgIFtHdWlkKCJENTdDNzI4OC1ENEFELTQ3NjgtQkUwMi05RDk2OTUzMkQ5NjAiKV0KICAgIFtJbnRlcmZhY2VUeXBlKENvbUludGVyZmFjZVR5cGUuSW50ZXJmYWNlSXNJVW5rbm93bildCiAgICBwcml2YXRlIGludGVyZmFjZSBJRmlsZURpYWxvZwogICAgewogICAgICAgIFtQcmVzZXJ2ZVNpZ10gaW50IFNob3coSW50UHRyIGh3bmRPd25lcik7CiAgICAgICAgdm9pZCBTZXRGaWxlVHlwZXModWludCBjRmlsZVR5cGVzLCBDT01ETEdfRklMVEVSU1BFQ1tdIHJnRmlsdGVyU3BlYyk7CiAgICAgICAgdm9pZCBTZXRGaWxlVHlwZUluZGV4KHVpbnQgaUZpbGVUeXBlKTsKICAgICAgICB2b2lkIEdldEZpbGVUeXBlSW5kZXgob3V0IHVpbnQgcGlGaWxlVHlwZSk7CiAgICAgICAgW1ByZXNlcnZlU2lnXSBpbnQgQWR2aXNlKEludFB0ciBwZmRlLCBvdXQgdWludCBwZHdDb29raWUpOwogICAgICAgIFtQcmVzZXJ2ZVNpZ10gaW50IFVuYWR2aXNlKHVpbnQgZHdDb29raWUpOwogICAgICAgIFtQcmVzZXJ2ZVNpZ10gaW50IFNldE9wdGlvbnModWludCBmb3MpOwogICAgICAgIFtQcmVzZXJ2ZVNpZ10gaW50IEdldE9wdGlvbnMob3V0IHVpbnQgcGZvcyk7CiAgICAgICAgW1ByZXNlcnZlU2lnXSBpbnQgU2V0RGVmYXVsdEZvbGRlcihJU2hlbGxJdGVtIHBzaSk7CiAgICAgICAgW1ByZXNlcnZlU2lnXSBpbnQgU2V0Rm9sZGVyKElTaGVsbEl0ZW0gcHNpKTsKICAgICAgICBbUHJlc2VydmVTaWddIGludCBHZXRGb2xkZXIob3V0IElTaGVsbEl0ZW0gcHBzaSk7CiAgICAgICAgW1ByZXNlcnZlU2lnXSBpbnQgR2V0Q3VycmVudFNlbGVjdGlvbihvdXQgSVNoZWxsSXRlbSBwcHNpKTsKICAgICAgICBbUHJlc2VydmVTaWddIGludCBTZXRGaWxlTmFtZShbTWFyc2hhbEFzKFVubWFuYWdlZFR5cGUuTFBXU3RyKV0gc3RyaW5nIHBzek5hbWUpOwogICAgICAgIFtQcmVzZXJ2ZVNpZ10gaW50IFNldFRpdGxlKFtNYXJzaGFsQXMoVW5tYW5hZ2VkVHlwZS5MUFdTdHIpXSBzdHJpbmcgcHN6VGl0bGUpOwogICAgICAgIFtQcmVzZXJ2ZVNpZ10gaW50IFNldE9rQnV0dG9uTGFiZWwoW01hcnNoYWxBcyhVbm1hbmFnZWRUeXBlLkxQV1N0cildIHN0cmluZyBwc3pUZXh0KTsKICAgICAgICBbUHJlc2VydmVTaWddIGludCBTZXRGaWxlTmFtZUxhYmVsKFtNYXJzaGFsQXMoVW5tYW5hZ2VkVHlwZS5MUFdTdHIpXSBzdHJpbmcgcHN6TGFiZWwpOwogICAgICAgIFtQcmVzZXJ2ZVNpZ10gaW50IEdldFJlc3VsdChvdXQgSVNoZWxsSXRlbSBwcHNpKTsKICAgICAgICBbUHJlc2VydmVTaWddIGludCBBZGRQbGFjZShJU2hlbGxJdGVtIHBzaSwgaW50IGZkYXApOwogICAgICAgIFtQcmVzZXJ2ZVNpZ10gaW50IFNldERlZmF1bHRFeHRlbnNpb24oW01hcnNoYWxBcyhVbm1hbmFnZWRUeXBlLkxQV1N0cildIHN0cmluZyBwc3pEZWZhdWx0RXh0ZW5zaW9uKTsKICAgICAgICBbUHJlc2VydmVTaWddIGludCBDbG9zZShpbnQgaHIpOwogICAgICAgIFtQcmVzZXJ2ZVNpZ10gaW50IFNldENsaWVudEd1aWQocmVmIEd1aWQgZ3VpZCk7CiAgICAgICAgW1ByZXNlcnZlU2lnXSBpbnQgR2V0Q2xpZW50R3VpZChvdXQgR3VpZCBndWlkKTsKICAgICAgICBbUHJlc2VydmVTaWddIGludCBDbGVhckNsaWVudERhdGEoKTsKICAgICAgICBbUHJlc2VydmVTaWddIGludCBTZXRGaWx0ZXIoSW50UHRyIHBGaWx0ZXIpOwogICAgfQogICAgW0NvbUltcG9ydF0KICAgIFtHdWlkKCJENTdDNzI4OC1ENEFELTQ3NjgtQkUwMi05RDk2OTUzMkQ5NjAiKV0KICAgIFtJbnRlcmZhY2VUeXBlKENvbUludGVyZmFjZVR5cGUuSW50ZXJmYWNlSXNJVW5rbm93bildCiAgICBwcml2YXRlIGludGVyZmFjZSBJRmlsZU9wZW5EaWFsb2cKICAgIHsKICAgICAgICB2b2lkIEdldFJlc3VsdHMob3V0IEludFB0ciBwcGVudW0pOwogICAgICAgIHZvaWQgR2V0U2VsZWN0ZWRJdGVtcyhvdXQgSW50UHRyIHBwc2FpKTsKICAgIH0KICAgIFtEbGxJbXBvcnQoInNoZWxsMzIuZGxsIiwgQ2hhclNldCA9IENoYXJTZXQuVW5pY29kZSldCiAgICBwcml2YXRlIHN0YXRpYyBleHRlcm4gaW50IFNIQ3JlYXRlSXRlbUZyb21QYXJzaW5nTmFtZSgKICAgICAgICBbTWFyc2hhbEFzKFVubWFuYWdlZFR5cGUuTFBXU3RyKV0gc3RyaW5nIHBzelBhdGgsCiAgICAgICAgSW50UHRyIHBiYywKICAgICAgICByZWYgR3VpZCByaWlkLAogICAgICAgIFtNYXJzaGFsQXMoVW5tYW5hZ2VkVHlwZS5JbnRlcmZhY2UpXSBvdXQgSVNoZWxsSXRlbSBwcHYpOwogICAgcHVibGljIHN0YXRpYyBzdHJpbmcgU2hvd1BpY2tlcihzdHJpbmcgc3RhcnRQYXRoLCBzdHJpbmcgdGl0bGUpCiAgICB7CiAgICAgICAgSW50UHRyIHBEbGc7CiAgICAgICAgR3VpZCBjbHNpZCA9IENMU0lEX0ZpbGVPcGVuRGlhbG9nOwogICAgICAgIEd1aWQgaWlkID0gSUlEX0lGaWxlT3BlbkRpYWxvZzsKICAgICAgICBpbnQgaHIgPSBDb0NyZWF0ZUluc3RhbmNlKHJlZiBjbHNpZCwgSW50UHRyLlplcm8sIENMU0NUWF9JTlBST0NfU0VSVkVSLCByZWYgaWlkLCBvdXQgcERsZyk7CiAgICAgICAgaWYgKGhyICE9IDApIHJldHVybiBudWxsOwogICAgICAgIG9iamVjdCBvYmogPSBNYXJzaGFsLkdldE9iamVjdEZvcklVbmtub3duKHBEbGcpOwogICAgICAgIE1hcnNoYWwuUmVsZWFzZShwRGxnKTsKICAgICAgICB0cnkKICAgICAgICB7CiAgICAgICAgICAgIElGaWxlRGlhbG9nIGRsZyA9IChJRmlsZURpYWxvZylvYmo7CiAgICAgICAgICAgIHRyeSB7IGRsZy5TZXRPcHRpb25zKEZPU19QSUNLRk9MREVSUyB8IEZPU19GT1JDRUZJTEVTWVNURU0pOyB9IGNhdGNoIHsgfQogICAgICAgICAgICB0cnkKICAgICAgICAgICAgewogICAgICAgICAgICAgICAgaWYgKCFzdHJpbmcuSXNOdWxsT3JFbXB0eShzdGFydFBhdGgpICYmIFN5c3RlbS5JTy5EaXJlY3RvcnkuRXhpc3RzKHN0YXJ0UGF0aCkpCiAgICAgICAgICAgICAgICB7CiAgICAgICAgICAgICAgICAgICAgR3VpZCBndWlkID0gbmV3IEd1aWQoIjk0RUEyQjk0LUU5Q0MtNDlFMC1CMDkwLTU4MkZBNENDNkQzMCIpOwogICAgICAgICAgICAgICAgICAgIElTaGVsbEl0ZW0gaXRlbTsKICAgICAgICAgICAgICAgICAgICBTSENyZWF0ZUl0ZW1Gcm9tUGFyc2luZ05hbWUoc3RhcnRQYXRoLCBJbnRQdHIuWmVybywgcmVmIGd1aWQsIG91dCBpdGVtKTsKICAgICAgICAgICAgICAgICAgICBpZiAoaXRlbSAhPSBudWxsKSB7IHRyeSB7IGRsZy5TZXRGb2xkZXIoaXRlbSk7IH0gY2F0Y2ggeyB9IH0KICAgICAgICAgICAgICAgIH0KICAgICAgICAgICAgfQogICAgICAgICAgICBjYXRjaCB7IH0KICAgICAgICAgICAgdHJ5IHsgZGxnLlNldFRpdGxlKHRpdGxlKTsgfSBjYXRjaCB7IH0KICAgICAgICAgICAgaW50IHJjID0gZGxnLlNob3coSW50UHRyLlplcm8pOwogICAgICAgICAgICBpZiAocmMgIT0gMCkgcmV0dXJuIG51bGw7CiAgICAgICAgICAgIHRyeQogICAgICAgICAgICB7CiAgICAgICAgICAgICAgICBJU2hlbGxJdGVtIHJlc3VsdDsKICAgICAgICAgICAgICAgIGRsZy5HZXRSZXN1bHQob3V0IHJlc3VsdCk7CiAgICAgICAgICAgICAgICBpZiAocmVzdWx0ID09IG51bGwpIHJldHVybiBudWxsOwogICAgICAgICAgICAgICAgc3RyaW5nIHBhdGg7CiAgICAgICAgICAgICAgICByZXN1bHQuR2V0RGlzcGxheU5hbWUoMHg4MDA1ODAwMCwgb3V0IHBhdGgpOwogICAgICAgICAgICAgICAgcmV0dXJuIHBhdGg7CiAgICAgICAgICAgIH0KICAgICAgICAgICAgY2F0Y2ggeyByZXR1cm4gbnVsbDsgfQogICAgICAgIH0KICAgICAgICBjYXRjaCB7IHJldHVybiBudWxsOyB9CiAgICAgICAgZmluYWxseQogICAgICAgIHsKICAgICAgICAgICAgdHJ5IHsgTWFyc2hhbC5SZWxlYXNlQ29tT2JqZWN0KG9iaik7IH0gY2F0Y2ggeyB9CiAgICAgICAgfQogICAgfQogICAgW0RsbEltcG9ydCgib2xlMzIuZGxsIildCiAgICBwcml2YXRlIHN0YXRpYyBleHRlcm4gaW50IENvQ3JlYXRlSW5zdGFuY2UocmVmIEd1aWQgY2xzaWQsIEludFB0ciBwVW5rT3V0ZXIsIHVpbnQgZHdDbHNDb250ZXh0LCByZWYgR3VpZCByaWlkLCBvdXQgSW50UHRyIHBwdik7Cn0="
+call :olog "picker: modern dialog starting"
 "%PSX%" -NoProfile -STA -Command "try{ $src=[Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($env:OC_B64)); Add-Type -TypeDefinition $src; $r=[ModernFolderPicker]::ShowPicker($env:OC_START, 'Folder for OpenCode'); if($r){ [IO.File]::WriteAllLines($env:OC_PICK, $r) } }catch{}" >nul 2>&1
-if exist "%OC_OUT%" goto :pick_read_sys
-REM Fallback: the classic FolderBrowserDialog small dialog.
+call :olog "picker: modern dialog finished"
+if exist "%OC_OUT%" set "OC_PICKED_MODERN=1"
+if exist "%OC_OUT%" goto :pick_read_modern
+call :olog "picker: nothing from the modern dialog (ESC/X or compile failed) - opening the classic one"
+REM Fallback: the classic FolderBrowserDialog small dialog (the ESC target).
+call :olog "picker: classic dialog starting"
 "%PSX%" -NoProfile -STA -Command "try{Add-Type -AssemblyName System.Windows.Forms; $d = New-Object System.Windows.Forms.FolderBrowserDialog; $d.Description = 'Folder to open OpenCode in'; $d.ShowNewFolderButton = $true; if ($d.ShowDialog() -eq 'OK') { [IO.File]::WriteAllLines($env:OC_PICK, $d.SelectedPath) } }catch{}" >nul 2>&1
+:pick_read_modern
+if defined OC_PICKED_MODERN call :olog "picker: modern dialog returned a folder"
 :pick_read_sys
 REM Read the chosen path back, then remove the temporary file.
 if exist "%OC_OUT%" for /f "usebackq delims=" %%i in ("%OC_OUT%") do set "OPFOLDER=%%i"
@@ -1835,7 +1844,26 @@ call :trace upd_start
 set "SU_TMP=%STATE_DIR%\upd_remote.bat"
 if exist "%SU_TMP%" del /f /q "%SU_TMP%" >nul 2>&1
 call :have_exe curl.exe
+REM v2.12: resolve the newest commit SHA on main through the GitHub API
+REM first, then build a SHA-pinned raw URL. A raw/<SHA>/ URL can never
+REM serve a stale CDN copy, unlike raw/main which once did (the bug that
+REM kept v2.11 away from a launched update). API miss falls back to the
+REM plain main URL.
+set "SU_SHA="
+set "SU_SHA_OUT=%STATE_DIR%\su_sha.tmp"
+if exist "%SU_SHA_OUT%" del /f /q "%SU_SHA_OUT%" >nul 2>&1
+"%PSX%" -NoProfile -Command "try{ [Net.ServicePointManager]::SecurityProtocol=[Net.SecurityProtocolType]::Tls12; $r = Invoke-RestMethod -UseBasicParsing -Uri 'https://api.github.com/repos/jeko1107/opencode-infinite/commits/main' -TimeoutSec 15; if ($r.sha -match '^[0-9a-f]{40}$') { [IO.File]::WriteAllText($env:SU_SHA_OUT, $r.sha) } }catch{}" >nul 2>&1
+if not exist "%SU_SHA_OUT%" goto :su_url_plain
+for /f "usebackq delims=" %%s in ("%SU_SHA_OUT%") do set "SU_SHA=%%s"
+del /f /q "%SU_SHA_OUT%" >nul 2>&1
+if not defined SU_SHA goto :su_url_plain
+call :trace upd_sha %SU_SHA%
+set "SU_URL=https://raw.githubusercontent.com/jeko1107/opencode-infinite/%SU_SHA%/OpenCode%%20Infinite.bat"
+call :trace upd_url %SU_URL%
+goto :su_url_done
+:su_url_plain
 set "SU_URL=%UPDATE_URL%"
+:su_url_done
 if "%HAVE%"=="1" goto :su_curl
 "%PSX%" -NoProfile -Command "try{[Net.ServicePointManager]::SecurityProtocol=[Net.SecurityProtocolType]::Tls12; Invoke-WebRequest -UseBasicParsing -Uri $env:SU_URL -OutFile $env:SU_TMP -TimeoutSec 30}catch{exit 1}" >nul 2>&1
 if errorlevel 1 goto :su_eof
