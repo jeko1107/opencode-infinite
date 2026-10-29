@@ -2,18 +2,21 @@
 setlocal EnableExtensions
 title OpenCode
 REM ============================================================
-REM  OpenCode launcher  (v2.5)
+REM  OpenCode launcher  (v2.6)
 REM  WARP egress rotation + dependency bootstrap + auto-resume.
 REM
 REM  Usage:
 REM    double-click                          -> folder menu
 REM    drag a folder onto this file          -> opens in that folder
-REM    "OpenCode Infinite v2.5.bat" "D:\work\project"
+REM    "OpenCode Infinite v2.6.bat" "D:\work\project"
 REM                                          -> opens in that folder
 REM
 REM  This script never moves, renames or deletes your chats, your
 REM  history or any file of yours, except option [5] Deep reset,
-REM  which asks first and archives before it deletes.
+REM  which asks first and archives before it deletes. The self-update
+REM  in [upd] is the only other file it touches: it replaces this
+REM  script with the newer repo copy, only after you say yes, and
+REM  only after a backup of this script was made first.
 REM
 REM  Everything is user-mode. UAC is only needed if WARP
 REM  has to be installed, and WARP is optional: without it the
@@ -37,9 +40,11 @@ REM
 REM  - Rotates the WARP egress IP through the local proxy: drops the
 REM    old registration, creates a new one, verifies the trace says
 REM    warp=on, and starts the tunnel in proxy mode. Every warp-cli
-REM    call is time-bounded and logged to wcli.log. A missing WARP
-REM    registration is detected and recreated before any tunnel call,
-REM    and the tunnel falls back to WireGuard when MASQUE is refused.
+REM    call is time-bounded and logged to wcli.log, with the daemon's
+REM    own error text on every failure, so a wedge is readable instead
+REM    of a private salt of exit codes. A missing WARP registration is
+REM    detected and recreated before any tunnel call, and the tunnel
+REM    falls back to WireGuard when MASQUE is refused.
 REM
 REM  - Verifies the route, not just the tunnel: IP fetches ignore
 REM    stale HTTP_PROXY/HTTPS_PROXY, and optionally each candidate IP
@@ -69,9 +74,14 @@ REM
 REM  - Deep reset archives across volumes with copy-verify-delete
 REM    before removing anything.
 REM
+REM  - Self-update [upd]: once per start the launcher checks the GitHub
+REM    repo for a newer copy of itself. Silent when equal or offline;
+REM    when a new version is found it asks, backs this script up, and
+REM    swaps the new one in through a helper on a post-exit window.
+REM
 REM  All tunables live in the settings block below: rotation tries,
 REM  probe on/off and its model, resume message and timeout, WARP
-REM  timings, log watching, and the proxy port.
+REM  timings, log watching, the proxy port, and the self-update.
 REM ============================================================
 
 REM - settings (edit freely)
@@ -104,6 +114,10 @@ set "PROBE_MODEL=opencode/deepseek-v4.1-flash-free"
 REM PROBE=0 skips the probe entirely (IPs are accepted without testing).
 REM Default ON so burned free-tier IPs are skipped before resume.
 set "PROBE=1"
+REM 1 = every start checks the GitHub repo for a newer launcher,
+REM offers to replace this script (backup first, ask first).
+REM 0 = never touches the network for the launcher itself.
+set "UPDATE_CHECK=1"
 
 REM - internal
 REM Local port where the WARP proxy listens (WARP proxy mode).
@@ -115,6 +129,9 @@ REM Endpoint that returns ip= and warp= lines, used to check the IP.
 set "TRACE_URL=https://www.cloudflare.com/cdn-cgi/trace"
 REM Official download address for the WARP installer (64-bit MSI).
 set "WARP_MSI_URL=https://downloads.cloudflareclient.com/v1/download/windows/ga"
+REM Self-update source. In this file a literal % is written %% , so the
+REM URL below ends in the real "...%20Infinite.bat" form the repo uses.
+set "UPDATE_URL=https://raw.githubusercontent.com/jeko1107/opencode-infinite/main/OpenCode%%20Infinite.bat"
 REM Hosts that must never go through the proxy.
 set "NO_PROXY=localhost,127.0.0.1,0.0.0.0,::1,[::1]"
 REM Default PowerShell command; replaced below by the full path if it exists.
@@ -179,6 +196,10 @@ if not exist "%STATE_DIR%" mkdir "%STATE_DIR%" >nul 2>&1
 REM Fresh trace for this run: the last line names the stage that froze.
 if exist "%STATE_DIR%\startup.log" del /f /q "%STATE_DIR%\startup.log" >nul 2>&1
 call :lock_check
+
+REM Once per start: check the repo for a newer launcher. Silent when
+REM nothing to do or offline; asks before ever replacing this file.
+if "%UPDATE_CHECK%"=="1" call :self_update
 
 REM ============================================================
 REM  1) WORKING FOLDER
@@ -776,8 +797,11 @@ set "OC_PIDF=%STATE_DIR%\tui.pid"
 if exist "%OC_PIDF%" del /f /q "%OC_PIDF%" >nul 2>&1
 REM Start-Process -ArgumentList treats one spaced string as ONE argument:
 REM split the flags into tokens first (FLAGS is only --continue here).
+REM PowerShell 5.1 REJECTS an empty -ArgumentList ("El argumento es NULL,
+REM ..."): a fresh start has no --continue, so the plain-exe branch must
+REM omit the parameter entirely when the list is empty.
 REM .cmd and .bat files are started through cmd.exe, others are started directly.
-"%PSX%" -NoProfile -Command "$exe=$env:OC_EXE; $a=@(); if($env:OC_FLAGS){ $a=([string]$env:OC_FLAGS) -split [char]32 }; $p=$null; if($exe -match '[.](cmd|bat)$'){ $p=Start-Process cmd.exe -ArgumentList (@('/c',$exe)+$a) -NoNewWindow -PassThru } else { $p=Start-Process $exe -ArgumentList $a -NoNewWindow -PassThru }; if(-not $p){ exit 1 }; $null=$p.Handle; Set-Content -LiteralPath $env:OC_PIDF -Value $p.Id; [void]$p.WaitForExit(); if($p.ExitCode -ne $null){ exit $p.ExitCode }; exit 1"
+"%PSX%" -NoProfile -Command "$exe=$env:OC_EXE; $a=@(); if($env:OC_FLAGS){ $a=([string]$env:OC_FLAGS) -split [char]32; $a=@($a | Where-Object { $_ }) }; $p=$null; if($exe -match '[.](cmd|bat)$'){ $p=Start-Process cmd.exe -ArgumentList (@('/c',$exe)+$a) -NoNewWindow -PassThru } elseif($a.Count){ $p=Start-Process $exe -ArgumentList @($a) -NoNewWindow -PassThru } else { $p=Start-Process $exe -NoNewWindow -PassThru }; if(-not $p){ exit 1 }; $null=$p.Handle; Set-Content -LiteralPath $env:OC_PIDF -Value $p.Id; [void]$p.WaitForExit(); if($p.ExitCode -ne $null){ exit $p.ExitCode }; exit 1"
 set "EC=%errorlevel%"
 goto :eof
 
@@ -943,9 +967,11 @@ REM - one warp-cli call with a hard time limit
 REM usage: call :wcli registration new
 REM A hung call is killed after WARP_CALL_TIMEOUT seconds. Failures
 REM are logged to %STATE_DIR%\wcli.log with a timestamp, the exit
-REM code and the exact subcommand. Every value travels through the
+REM code, the exact subcommand AND the daemon's own error text (last
+REM non-empty stdout/stderr line). Without that text the log only
+REM ever says "exit 1" and nobody can tell Registration missing from
+REM a daemon that is not listening. Every value travels through the
 REM environment, so no path can break the PowerShell command line.
-REM Runs one warp-cli command, adds --accept-tos, enforces the timeout, and logs failures.
 :wcli
 if not defined WARP goto :eof
 set "WCMD=%*"
@@ -953,7 +979,10 @@ set "OC_EXE=%WARP%"
 set "OC_ARGS=--accept-tos %WCMD%"
 set "OC_LOG=%STATE_DIR%\wcli.log"
 set "OC_TO=%WARP_CALL_TIMEOUT%"
-"%PSX%" -NoProfile -Command "$p=Start-Process -FilePath $env:OC_EXE -ArgumentList $env:OC_ARGS -PassThru -WindowStyle Hidden; $null=$p.Handle; if(-not $p.WaitForExit([int]$env:OC_TO*1000)){ try{$p.Kill()}catch{}; try{Add-Content -LiteralPath $env:OC_LOG -Value (((Get-Date -Format o)+' TIMEOUT: '+$env:OC_ARGS))}catch{}; exit 1 }; if($p.ExitCode -ne 0){ try{Add-Content -LiteralPath $env:OC_LOG -Value (((Get-Date -Format o)+' exit '+$p.ExitCode+': '+$env:OC_ARGS))}catch{}; exit $p.ExitCode }; exit 0" >nul 2>&1
+set "OC_RRF=%STATE_DIR%\wcli_out.txt"
+"%PSX%" -NoProfile -Command "$o=$env:OC_RRF; $p=Start-Process -FilePath $env:OC_EXE -ArgumentList $env:OC_ARGS -NoNewWindow -PassThru -RedirectStandardOutput $o -RedirectStandardError ($o+'.err'); if(-not $p){ exit 1 }; $null=$p.Handle; if(-not $p.WaitForExit([int]$env:OC_TO*1000)){ try{$p.Kill()}catch{}; try{Add-Content -LiteralPath $env:OC_LOG -Value (((Get-Date -Format o)+' TIMEOUT: '+$env:OC_ARGS))}catch{}; exit 1 }; if($p.ExitCode -eq $null){ exit 1 }; $rc=$p.ExitCode; if($rc -ne 0){ $why=''; foreach($f in @($o,($o+'.err'))){ if(Test-Path -LiteralPath $f){ $l=@(Get-Content -LiteralPath $f -ErrorAction SilentlyContinue | Where-Object { $_ }); if($l.Count){ $why=$l[$l.Count-1]; break } } }; $line=((Get-Date -Format o)+' exit '+$rc+': '+$env:OC_ARGS); if($why){ $line=$line+' :: '+$why }; try{Add-Content -LiteralPath $env:OC_LOG -Value $line}catch{}; exit $rc }; exit 0" >nul 2>&1
+if exist "%OC_RRF%" del /f /q "%OC_RRF%" >nul 2>&1
+if exist "%OC_RRF%.err" del /f /q "%OC_RRF%.err" >nul 2>&1
 set "WCLIRC=%errorlevel%"
 if not "%WCLIRC%"=="0" echo   [wcli] "%WCMD%" failed - see wcli.log
 exit /b %WCLIRC%
@@ -1589,6 +1618,111 @@ REM If the launcher freezes, the last line names the stage it froze in.
 :trace
 if not exist "%STATE_DIR%" goto :eof
 >>"%STATE_DIR%\startup.log" echo %DATE% %TIME% %*
+goto :eof
+
+REM - self-update: newest launcher from the GitHub repo [upd] ---------
+REM Once per start, before anything interactive. Steps:
+REM   1) download the raw .bat (curl, else PowerShell), 30 s cap,
+REM      direct (never through the WARP proxy), HTTP errors fail;
+REM   2) size gate (real script is ~70 KB, an error page is not) plus
+REM      a header-marker gate, so a truncated or wrong file never
+REM      replaces the launcher;
+REM   3) read "launcher  (vX.Y)" from the running file and the
+REM      downloaded one; equal -> one quiet line, no download copy.
+REM   4) different -> ask. On yes: backup to STATE_DIR, write a tiny
+REM      helper that waits for THIS cmd to exit (a running .bat cannot
+REM      be overwritten), copies the new file over it and restarts.
+REM      The current script ends right after starting it: no batch
+REM      line is ever read from a file that is being swapped.
+REM The check is fully silent when the network is down or the repo is
+REM unreachable: the launcher never blocks its start on GitHub.
+:self_update
+call :trace upd_start
+set "SU_TMP=%STATE_DIR%\upd_remote.bat"
+if exist "%SU_TMP%" del /f /q "%SU_TMP%" >nul 2>&1
+call :have_exe curl.exe
+set "SU_URL=%UPDATE_URL%"
+if "%HAVE%"=="1" goto :su_curl
+"%PSX%" -NoProfile -Command "try{[Net.ServicePointManager]::SecurityProtocol=[Net.SecurityProtocolType]::Tls12; Invoke-WebRequest -UseBasicParsing -Uri $env:SU_URL -OutFile $env:SU_TMP -TimeoutSec 30}catch{exit 1}" >nul 2>&1
+if errorlevel 1 goto :su_eof
+goto :su_size
+:su_curl
+curl.exe -L -f -s --max-time 30 --noproxy "*" -o "%SU_TMP%" "%UPDATE_URL%" >nul 2>&1
+if errorlevel 1 goto :su_eof
+REM Size gate: the launcher is ~70 KB. Anything smaller is junk.
+:su_size
+set "SU_OK="
+if exist "%SU_TMP%" for %%s in ("%SU_TMP%") do if %%~zs GEQ 20000 set "SU_OK=1"
+if not defined SU_OK goto :su_delete
+REM Header gate: it must be the launcher, never an HTML error page.
+findstr /b /c:"REM  OpenCode launcher" "%SU_TMP%" >nul 2>&1
+if errorlevel 1 goto :su_delete
+REM Version tokens, from the () in the header line.
+set "SU_LV="
+set "SU_RV="
+for /f "tokens=2 delims=()" %%v in ('findstr /b /c:"REM  OpenCode launcher  (" "%~f0"') do set "SU_LV=%%v"
+for /f "tokens=2 delims=()" %%v in ('findstr /b /c:"REM  OpenCode launcher  (" "%SU_TMP%"') do set "SU_RV=%%v"
+if not defined SU_LV goto :su_delete
+if not defined SU_RV goto :su_delete
+call :trace upd_ver %SU_LV% / %SU_RV%
+if /i "%SU_RV%"=="%SU_LV%" goto :su_same
+echo   [upd] update found: local v%SU_LV% - repo v%SU_RV%
+choice /c YN /n /m "   Replace this launcher with v%SU_RV%? [Y/N]: "
+if errorlevel 2 goto :su_delete
+goto :su_apply
+:su_same
+echo   [upd] launcher matches the repo, v%SU_LV%.
+goto :su_delete
+:su_apply
+call :trace upd_apply
+REM Backup first - it is never overwritten silently: timestamped name.
+set "SU_BAK=%STATE_DIR%\OpenCode Infinite backup %SU_LV%.bat"
+copy /y "%~f0" "%SU_BAK%" >nul 2>&1
+if errorlevel 1 goto :su_fail
+if not exist "%SU_BAK%" goto :su_fail
+REM The updater waits for this cmd to release the .bat, swallows the
+REM swap and restarts. Written with single caret escapes for the
+REM redirects; %%~ stays %%~ so the helper sees its own arguments.
+set "SU_HELP=%STATE_DIR%\oc_updater.cmd"
+>"%SU_HELP%" echo @echo off
+>>"%SU_HELP%" echo setlocal EnableExtensions
+>>"%SU_HELP%" echo title OpenCode update
+>>"%SU_HELP%" echo :u_retry
+>>"%SU_HELP%" echo del /f /q "%%~2" ^>nul 2^>^&1
+>>"%SU_HELP%" echo if not exist "%%~2" goto u_put
+>>"%SU_HELP%" echo timeout /t 1 /nobreak ^>nul 2^>^&1
+>>"%SU_HELP%" echo goto u_retry
+>>"%SU_HELP%" echo :u_put
+>>"%SU_HELP%" echo copy /y "%%~1" "%%~2" ^>nul 2^>^&1
+>>"%SU_HELP%" echo if errorlevel 1 goto u_fail
+>>"%SU_HELP%" echo start "" "%%~2"
+>>"%SU_HELP%" echo del /f /q "%%~1" ^>nul 2^>^&1
+>>"%SU_HELP%" echo del /f /q "%%~f0" ^>nul 2^>^&1
+>>"%SU_HELP%" echo exit /b 0
+>>"%SU_HELP%" echo :u_fail
+>>"%SU_HELP%" echo echo   [upd] The replacement could not finish during the restart.
+>>"%SU_HELP%" echo echo   The new copy stays in: %%~1
+>>"%SU_HELP%" echo echo   Replace by hand: %%~2
+>>"%SU_HELP%" echo pause
+>>"%SU_HELP%" echo exit /b 1
+if not exist "%SU_HELP%" goto :su_fail
+REM The restarted launcher would otherwise meet a fresh lock dir and be
+REM treated as a second instance. Same cleanup :quit does.
+if exist "%STATE_DIR%\lock\" rmdir /s /q "%STATE_DIR%\lock" >nul 2>&1
+echo   [upd] swapping in v%SU_RV% - this window closes now.
+call :trace upd_launch
+start "" "%SU_HELP%" "%SU_TMP%" "%~f0"
+REM Exit now: nothing here is read after the file is replaced.
+timeout /t 2 /nobreak >nul 2>&1
+exit
+:su_fail
+echo   [upd] the swap could not be prepared - keeping v%SU_LV%.
+echo         The downloaded copy is in "%SU_TMP%".
+pause
+goto :eof
+:su_delete
+del /f /q "%SU_TMP%" >nul 2>&1
+:su_eof
 goto :eof
 
 REM - keep the settings numeric (0 allowed only for numcfg0)
