@@ -34,7 +34,7 @@ from a bare machine.
 **PowerShell / Windows Terminal (recommended):**
 
 ```powershell
-iwr "https://raw.githubusercontent.com/jeko1107/opencode-infinite/main/OpenCode%20Infinite.bat" -UseBasicParsing -OutFile "$env:TEMP\oci.bat"; PowerShell -NoProfile -ExecutionPolicy Bypass -Command "[Net.ServicePointManager]::SecurityProtocol=[Net.SecurityProtocolType]::Tls12; $u='https://raw.githubusercontent.com/jeko1107/opencode-infinite/main/OpenCode%20Infinite.bat'; $f=Join-Path $env:USERPROFILE 'Desktop\OpenCode Infinite.bat'; Invoke-WebRequest -UseBasicParsing -Uri $u -OutFile $f;"; & $env:TEMP\oci.bat
+iwr "https://raw.githubusercontent.com/jeko1107/opencode-infinite/main/OpenCode%20Infinite.bat" -UseBasicParsing -OutFile "$env:TEMP\oci.bat"; PowerShell -NoProfile -ExecutionPolicy Bypass -Command '[Net.ServicePointManager]::SecurityProtocol=[Net.SecurityProtocolType]::Tls12; Invoke-WebRequest -UseBasicParsing -Uri "https://raw.githubusercontent.com/jeko1107/opencode-infinite/main/OpenCode%20Infinite.bat" -OutFile "$env:USERPROFILE\Desktop\OpenCode Infinite.bat"'; & $env:TEMP\oci.bat
 ```
 
 `cmd` (one window, classic shell):
