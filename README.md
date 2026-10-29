@@ -1,4 +1,4 @@
-# OpenCode Infinite - launcher handbook (v2.12)
+# OpenCode Infinite - launcher handbook (v2.13)
 
 A single-file Windows batch launcher for OpenCode that adds Cloudflare WARP
 egress rotation, dependency bootstrap, changed-IP auto-resume, watching of
@@ -151,10 +151,22 @@ Install fallback:
    the X) inside the Explorer-style modern picker counts as wanting the
    classic small dialog: it opens immediately and a cancel there too reaches
    the usual `Try again? [Y/N]` question.
- - **`install.log` records which dialog appeared**: `picker: modern dialog
-   starting` / `picker: classic dialog starting` / `picker: modern dialog
-   returned a folder` - so any future "it uses the old one" report is one
-   log read away from a cause.
+  - **`install.log` records which dialog appeared**: `picker: modern dialog
+    starting` / `picker: classic dialog starting` / `picker: modern dialog
+    returned a folder` - so any future "it uses the old one" report is one
+    log read away from a cause.
+
+### NEW in v2.13 - the pick that never picked is fixed
+
+The v2.11/v2.12 modern dialog could appear, accept your click on a folder,
+and still send you to the classic dialog - the pick never left the dialog.
+Cause: the C# interop declared the `IShellItem` COM interface with a
+mistyped GUID (`...4641-BE82...`; the real IID ends `...4655-BE82...`).
+`IFileDialog.GetResult` returns a raw pointer and .NET marshals it back
+through `QueryInterface` with that attribute GUID, so the pick could never
+land: the exception was swallowed and the launcher fell back. v2.13 corrects
+the GUID and stops swallowing: any modern-picker failure appends
+`picker: modern ERROR: <the exception>` to `install.log`.
 
 ### NEW in v2.11 - modern folder picker, ESC key, no auto-yank after quit
 
@@ -349,6 +361,7 @@ move "%USERPROFILE%\Desktop\opencode_chats_archiviate\<stamp>\opencode.db" "%USE
 | `deep reset` stops at `nothing to archive` | OpenCode refused to die; kill the process window and repeat |
 | `[upd]` says the repo copy failed to apply | the downloaded copy stays in `%STATE_DIR%\upd_remote.bat`; replace manually |
 | [upd] says the launcher matches the repo right after a release | you hit the stale raw/main CDN window (fixed in v2.12 - the updater now pins the commit SHA). Run [upd] again, or fetch a pinned commit copy with Update launcher.bat |
+| `install.log` has `picker: modern ERROR` | the modern dialog failed instead of pretending: the log names the exception. One real cause existed until v2.13 - a mistyped IShellItem IID made `GetResult` fail right after a successful pick, so the classic dialog opened instead |
 | `Invoke-WebRequest : positional parameter not found` while installing | you copied the old README one-liner that nests `PowerShell -Command`; PS 5.1 strips the inner quotes and the URL arrives split. Use the one-line install in section 2 (single shell, `Copy-Item`, no nested `-Command`) |
 | first paint shows `Another OpenCode launcher seems to be running. Continue anyway? [Y/N]` | a leftover lock in `%LOCALAPPDATA%\opencode-launcher\lock\` (usually a previous Ctrl+C). `Y` is safe - it is only an anti-double-open warning |
 | `Terminate batch job (Y/N)?` | Windows is asking because Ctrl+C was pressed inside a batch context. Answer no - on a Spanish system the keys are S/N, and pressing N is what keeps the launcher running while S kills it there |
@@ -361,8 +374,8 @@ move "%USERPROFILE%\Desktop\opencode_chats_archiviate\<stamp>\opencode.db" "%USE
 certutil -hashfile "OpenCode Infinite.bat" SHA256
 ```
 
-The v2.12 file hashes to
-`916045230F8E7A29DC16625167653496C630698F39EC0EA4032C84042E782AD6`.
+The v2.13 file hashes to
+`AC8FA226D15A12426B78B395A1E407619D7DAA113CECB0DC1C786687F5DF759F`.
 A different hash means you are not on the shipped copy - re-download it
 with the one-line install in section 2. Stale copies usually trace back
 to mid-download truncation, or someone else's half-broken mirror.
