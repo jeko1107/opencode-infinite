@@ -2,13 +2,14 @@
 setlocal EnableExtensions
 title OpenCode
 REM ============================================================
-REM  OpenCode launcher  (v2.15)
-REM  WARP egress rotation + dependency bootstrap + auto-resume.
+REM  OpenCode launcher  (v2.16)
+REM  Multi-egress (WARP / TOR / free HTTP) + dependency bootstrap
+REM  + auto-resume.
 REM
 REM  Usage:
 REM    double-click                          -> folder menu
 REM    drag a folder onto this file          -> opens in that folder
-REM    "OpenCode Infinite v2.15.bat" "D:\work\project"
+REM    "OpenCode Infinite v2.16.bat" "D:\work\project"
 REM                                          -> opens in that folder
 REM
 REM  This script never moves, renames or deletes your chats, your
@@ -21,6 +22,10 @@ REM
 REM  Everything is user-mode. UAC is only needed if WARP
 REM  has to be installed, and WARP is optional: without it the
 REM  launcher still starts opencode, only rotation is skipped.
+REM
+REM  PROXY SCOPE: HTTP_PROXY / HTTPS_PROXY are set only for the
+REM  opencode process tree (TUI + resume + probe). The rest of the
+REM  system (browser, other apps) is never touched.
 REM
 REM  Works on Windows 10/11, x64 / arm64 / 32-bit (limited), any
 REM  system language. The UI text is English only.
@@ -38,6 +43,25 @@ REM    once) and opencode (npm first, standalone build otherwise,
 REM    npm with 32-bit node on x86), with curl -f and a size gate on
 REM    every download.
 REM
+REM  - Once per start, checks npm for a newer opencode-ai and offers to
+REM    install it: installed version from "%OC_CMD% --version", latest
+REM    from "npm view opencode-ai version" over a direct connection (no
+REM    WARP proxy) with a hard 15 s cap, compared with :ver_gt. It asks
+REM    [Y/N] first, never runs during an automatic resume, and stays
+REM    silent when npm or the network is unavailable.
+REM
+REM  - After the workspace is chosen, asks for the egress mode:
+REM      [1] WARP   - Cloudflare WARP proxy mode (rotation supported)
+REM      [2] TOR    - local Tor SOCKS via an HTTP bridge (Privoxy
+REM                   on 127.0.0.1:8118, process-only)
+REM      [3] PROXY  - free HTTP proxies from the ProxyScrape list
+REM                   (process-only; dead ones are skipped)
+REM      [4] NONE   - direct, no proxy
+REM
+REM  - In TOR mode no WARP rotation runs: a retry restarts the
+REM    resume on the same circuit. In PROXY mode a retry picks
+REM    another free proxy. NONE returns to the menu.
+REM
 REM  - Rotates the WARP egress IP through the local proxy: drops the
 REM    old registration, creates a new one, verifies the trace says
 REM    warp=on, and starts the tunnel in proxy mode. Every warp-cli
@@ -54,18 +78,22 @@ REM    IPs are skipped. IP_FIND_MAX=0 keeps hunting until one works.
 REM
 REM  - Watches the log while opencode runs. A fatal line (drain
 REM    failure, usage limit, rate limit, quota, credits) kills the TUI
-REM    and starts a rotation; recoverable errors are ignored, so it
-REM    only fires when the chat is actually stuck.
+REM    and starts the egress retry; recoverable errors are ignored, so
+REM    it only fires when the chat is actually stuck.
 REM
 REM  - Resumes the chat on the new IP. The resume runs as a bounded
 REM    child process with stdout and stderr captured, under a private
-REM    standalone server born with the current proxy env. If it does
-REM    not answer within RESUME_TIMEOUT the whole tree is killed and
-REM    the launcher rotates instead of freezing on "sending continue".
-REM    On failure the last lines of resume.err are printed.
-REM
-REM  - Restarts the background opencode service after every rotation,
-REM    so the next TUI never inherits sockets from the old tunnel.
+REM    server born with the current proxy env. On OpenCode v2 that is
+REM    --standalone; v1 has no shared service and no such flag, so the
+REM    launcher probes the CLI help and drops the flag there. If it
+REM    does not answer within RESUME_TIMEOUT the whole tree is killed
+REM    and the launcher rotates instead of freezing on "sending
+REM    continue". On failure the last lines of resume.err are printed.
+
+REM  - Restarts the background opencode service after every rotation
+REM    (v2 only), so the next TUI never inherits sockets from the old
+REM    tunnel. v1 starts a fresh server per process, so there is
+REM    nothing to restart.
 REM
 REM  - Locking and housekeeping: a second instance is locked out,
 REM    temp files are unique, settings are validated numeric, every
@@ -82,7 +110,8 @@ REM    swaps the new one in through a helper on a post-exit window.
 REM
 REM  All tunables live in the settings block below: rotation tries,
 REM  probe on/off and its model, resume message and timeout, WARP
-REM  timings, log watching, the proxy port, and the self-update.
+REM  timings, log watching, the proxy port, TOR/Privoxy ports, the
+REM  ProxyScrape URL, and the self-update.
 REM ============================================================
 
 REM - settings (edit freely)
@@ -127,7 +156,23 @@ set "PROBE=1"
 REM 1 = every start checks the GitHub repo for a newer launcher,
 REM offers to replace this script (backup first, ask first).
 REM 0 = never touches the network for the launcher itself.
-set "UPDATE_CHECK=1"
+REM v2.16: default OFF while the repo copy is older than this file.
+REM The complete [upd] block is unchanged; set this to 1 to re-enable it.
+set "UPDATE_CHECK=0"
+
+REM --- multi-egress tunables ---
+REM TOR SOCKS port (default Tor Browser / tor service). Informational:
+REM the launcher talks to the HTTP bridge, never to this port directly.
+set "TOR_SOCKS_PORT=9050"
+REM Privoxy (or any HTTP->SOCKS bridge) listen port. Required because
+REM OpenCode/Bun does not speak SOCKS5 natively; only HTTP_PROXY works.
+set "TOR_HTTP_PORT=8118"
+REM ProxyScrape free list (protocolipport text). Only http:// entries used.
+set "PROXY_LIST_URL=https://api.proxyscrape.com/v4/free-proxy-list/get?request=display_proxies&protocol=http&proxy_format=protocolipport&format=text"
+REM How many free proxies to try before giving up (per rotate).
+set "PROXY_TRY_MAX=12"
+REM Seconds a single free-proxy probe may take.
+set "PROXY_PROBE_TIMEOUT=8"
 
 REM - internal
 REM Local port where the WARP proxy listens (WARP proxy mode).
@@ -150,6 +195,10 @@ if exist "%SystemRoot%\System32\WindowsPowerShell\v1.0\powershell.exe" set "PSX=
 REM This file's own path: the folder picker reads its embedded PowerShell
 REM block from here, so the picker never needs a helper file on disk.
 set "OCI_SELF=%~f0"
+REM EGRESS mode: WARP | TOR | PROXY | NONE (set by the menu after the folder)
+set "EGRESS=WARP"
+REM ACTIVE_PROXY holds the exact URL handed to opencode (process-only).
+set "ACTIVE_PROXY="
 
 REM UTF-8 console: folder paths in any system language survive the
 REM write/read round trip in lastfolder.txt
@@ -181,6 +230,15 @@ set "IP="
 set "WARP="
 REM OC_CMD: full path of the opencode command, filled by find_opencode.
 set "OC_CMD="
+REM CLI capabilities, filled by :detect_caps once opencode is located:
+REM CAP_STANDALONE=1 when "run --standalone" exists (OpenCode v2),
+REM CAP_SERVICE=1 when the "opencode service" command exists (v2).
+REM v1 has neither: --standalone makes it print the help screen instead
+REM of running the message, and "service" is an unknown command.
+set "CAP_STANDALONE="
+set "CAP_SERVICE="
+REM OCUPD: 1 once the once-per-start npm version check has run.
+set "OCUPD="
 REM one fixed throwaway session for every probe: deleted after a pass
 REM so that --continue always points at the real chat, never the probe
 set "OC_PROBE_ID=ses_probe0000000"
@@ -203,6 +261,10 @@ call :numcfg ROTATE_ROUNDS 3
 call :numcfg WARP_CALL_TIMEOUT 15
 call :numcfg WHERE_TIMEOUT 5
 call :numcfg RESUME_TIMEOUT 90
+call :numcfg PROXY_TRY_MAX 12
+call :numcfg PROXY_PROBE_TIMEOUT 8
+call :numcfg TOR_SOCKS_PORT 9050
+call :numcfg TOR_HTTP_PORT 8118
 REM this one may legitimately be 0 (hunt with no limit)
 call :numcfg0 IP_FIND_MAX 0
 
@@ -380,6 +442,52 @@ call :trace folder "%CD%"
 echo.
 
 REM ============================================================
+REM  1b) EGRESS MODE (process-only for opencode)
+REM ============================================================
+REM Asks once after the folder is fixed. The choice lives in EGRESS and
+REM ACTIVE_PROXY. Only the opencode process tree inherits the proxy env.
+:egress_menu
+echo ============================================================
+echo   Choose egress for OpenCode only (system traffic stays direct)
+echo ============================================================
+echo.
+echo   [1] WARP     - Cloudflare WARP proxy mode (rotation supported)
+echo   [2] TOR      - local Tor SOCKS via HTTP bridge on :%TOR_HTTP_PORT%
+echo   [3] PROXY    - free HTTP proxies (ProxyScrape list)
+echo   [4] NONE     - direct, no proxy
+echo.
+echo   One key, no Enter.
+echo.
+choice /c 1234 /n /m "Pick egress: "
+if errorlevel 4 (
+  set "EGRESS=NONE"
+  set "ACTIVE_PROXY="
+  set "WARP="
+  echo   [egress] NONE - direct.
+  goto :egress_done
+)
+if errorlevel 3 (
+  set "EGRESS=PROXY"
+  set "ACTIVE_PROXY="
+  set "WARP="
+  echo   [egress] PROXY - free HTTP list.
+  goto :egress_done
+)
+if errorlevel 2 (
+  set "EGRESS=TOR"
+  set "WARP="
+  set "ACTIVE_PROXY=http://127.0.0.1:%TOR_HTTP_PORT%"
+  echo   [egress] TOR - expect Tor on :%TOR_SOCKS_PORT% + Privoxy on :%TOR_HTTP_PORT%.
+  goto :egress_done
+)
+set "EGRESS=WARP"
+set "ACTIVE_PROXY="
+echo   [egress] WARP.
+:egress_done
+echo.
+call :trace egress %EGRESS%
+
+REM ============================================================
 REM  2) DEPENDENCIES
 REM ============================================================
 REM Each stage names itself before it runs. They are silent when they work,
@@ -390,7 +498,8 @@ echo   [dep] curl
 call :have_exe curl.exe
 set "HAVE_CURL=%HAVE%"
 
-REM - WARP (optional)
+REM - WARP (optional, only when EGRESS=WARP)
+if /i not "%EGRESS%"=="WARP" goto :check_opencode
 REM Look for warp-cli. If found, skip the WARP setup and go to opencode.
 call :trace dep_warp
 echo   [dep] warp
@@ -446,8 +555,11 @@ echo   Get it by hand: https://github.com/sst/opencode/releases
 pause
 goto :quit
 
-REM Both dependencies are ready. Short pause before the menu.
+REM Both dependencies are ready. Probe what this CLI build supports,
+REM then a short pause before the menu.
 :ready
+call :detect_caps
+call :oc_update_check
 call :trace ready
 timeout /t 1 /nobreak >nul 2>&1
 
@@ -465,7 +577,10 @@ echo ============================================================
 echo   OpenCode
 echo.
 echo   Folder : "%CD%"
-REM Show the WARP path if WARP was found; otherwise say rotation is off.
+echo   Egress : %EGRESS%
+if defined ACTIVE_PROXY echo   Proxy  : %ACTIVE_PROXY%
+REM Show the WARP path only in WARP mode; otherwise say rotation is off.
+if /i not "%EGRESS%"=="WARP" goto :menu_warp_done
 if defined WARP goto :menu_warp_path
 echo   WARP   : none ^(rotation disabled^)
 goto :menu_warp_done
@@ -480,6 +595,7 @@ echo.
 
 REM Connect WARP the first time the menu is shown in this session.
 REM Later passes skip this step, because WARP_UP is already 1.
+if /i not "%EGRESS%"=="WARP" goto :menu_ip
 if not defined WARP goto :menu_ip
 if "%WARP_UP%"=="1" goto :menu_ip
 call :warp_up
@@ -487,20 +603,23 @@ set "WARP_UP=1"
 REM Read the current exit IP through the proxy. WFLAG receives warp=on or off.
 :menu_ip
 set "WFLAG="
-if defined WARP call :getip2 IP WFLAG
+if /i "%EGRESS%"=="WARP" if defined WARP call :getip2 IP WFLAG
 if defined IP goto :menu_ip_ok
 REM No IP could be read: show "unknown" with the reason.
 set "IP=unknown"
-if defined WARP set "IP=unknown - WARP proxy not answering"
+if /i "%EGRESS%"=="WARP" if defined WARP set "IP=unknown - WARP proxy not answering"
+if /i "%EGRESS%"=="TOR" set "IP=via Tor"
+if /i "%EGRESS%"=="PROXY" if defined ACTIVE_PROXY set "IP=via free proxy"
+if /i "%EGRESS%"=="NONE" set "IP=direct"
 :menu_ip_ok
 echo   Exit IP: %IP%
 echo.
 echo   What do you want to do?
 echo.
-echo   [1] Fresh start   - get a new IP, then open OpenCode
+echo   [1] Fresh start   - get a new IP / proxy, then open OpenCode
 echo                       (your chats and history stay untouched)
-echo   [2] Continue      - same IP, open OpenCode as it was
-echo   [3] Change IP     - rotate only, do not open OpenCode
+echo   [2] Continue      - same egress, open OpenCode as it was
+echo   [3] Change IP     - rotate / pick new proxy only
 echo   [4] Folder        - work in a different folder
 echo   [5] Deep reset    - kill opencode, move chats to the Desktop,
 echo                       clear saved tokens, open a fresh session
@@ -550,39 +669,72 @@ set "RESUME="
 set "COLD=1"
 goto :run
 
-REM Launch step. Checks the proxy first, then starts opencode.
+REM Launch step. Checks the egress first, then starts opencode.
 :run
 echo.
 if "%COLD%"=="1" echo --- fresh start ---------------------------------------------
 if not "%COLD%"=="1" echo --- continue ------------------------------------------------
 echo     "%CD%"
+echo     egress: %EGRESS%
 
 REM never launch through a dead proxy, and never "rotate" into a
 REM direct connection: the gate asks instead of leaking silently.
-REM Without WARP there is no proxy to check: go straight to launch.
-if not defined WARP goto :run_noproxy
-REM Hand the proxy to this process only. If it does not answer, ask the user.
-call :export_proxy
-if not errorlevel 1 goto :run_gate_ok
-echo   [!] WARP proxy is not answering - rotation has no effect.
-echo       Going direct would run opencode on your real IP.
-choice /c YN /n /m "   Continue without WARP? [Y/N]: "
-if errorlevel 2 goto :menu_loop
+if /i "%EGRESS%"=="NONE" goto :run_noproxy
+if /i "%EGRESS%"=="WARP" if not defined WARP goto :run_noproxy
+
+REM Prepare ACTIVE_PROXY for the chosen mode (process-only).
+if /i "%EGRESS%"=="WARP" (
+  set "ACTIVE_PROXY=%PROXY%"
+  call :export_proxy
+  if errorlevel 1 (
+    echo   [!] WARP proxy is not answering - rotation has no effect.
+    echo       Going direct would run opencode on your real IP.
+    choice /c YN /n /m "   Continue without WARP? [Y/N]: "
+    if errorlevel 2 goto :menu_loop
+    goto :run_noproxy
+  )
+  if "%COLD%"=="1" call :ensure_new_ip
+  goto :run_gate_ok
+)
+if /i "%EGRESS%"=="TOR" (
+  call :tor_ready
+  if errorlevel 1 (
+    echo   [!] Tor/Privoxy not answering on :%TOR_HTTP_PORT%.
+    echo       Start Tor + Privoxy ^(or an HTTP-^>SOCKS bridge^) first.
+    choice /c YN /n /m "   Continue direct? [Y/N]: "
+    if errorlevel 2 goto :menu_loop
+    goto :run_noproxy
+  )
+  set "ACTIVE_PROXY=http://127.0.0.1:%TOR_HTTP_PORT%"
+  call :export_proxy_active
+  goto :run_gate_ok
+)
+if /i "%EGRESS%"=="PROXY" (
+  call :pick_free_proxy
+  if errorlevel 1 (
+    echo   [!] no working free proxy found.
+    choice /c YN /n /m "   Continue direct? [Y/N]: "
+    if errorlevel 2 goto :menu_loop
+    goto :run_noproxy
+  )
+  call :export_proxy_active
+  goto :run_gate_ok
+)
 goto :run_noproxy
+
 REM Proxy is working: continue with the gate checks.
 :run_gate_ok
-REM the free tier counts per egress IP: never launch a fresh start on
-REM the same IP the previous run used.
-if "%COLD%"=="1" call :ensure_new_ip
 REM the background service is the process that talks to the API: it
 REM must be born with the proxy env. if it was ever started direct
 REM (for example by hand before WARP existed), restart it once.
 REM The svc_proxied marker records that the restart already happened.
+REM v1 has no shared service: skip the restart and the marker there.
+if not defined CAP_SERVICE goto :run_marked
 if not exist "%STATE_DIR%\svc_proxied" call "%OC_CMD%" service restart >nul 2>&1
 if exist "%STATE_DIR%\svc_proxied" goto :run_marked
 echo ok>"%STATE_DIR%\svc_proxied"
 :run_marked
-REM Common path for launching with or without WARP.
+REM Common path for launching with or without egress.
 :run_noproxy
 
 REM Remember the log size before launch, so the watcher and the quota
@@ -621,25 +773,30 @@ goto :quota_rotate
 REM No watcher hit. A nonzero exit code means opencode crashed.
 :run_no_hit
 if not "%EC%"=="0" goto :exit_rotate
-REM Without WARP there is nothing to rotate: go back to the menu.
-if not defined WARP goto :closed
+REM NONE (or WARP mode without WARP) has no egress to retry: menu.
+if /i "%EGRESS%"=="NONE" goto :closed
+if /i "%EGRESS%"=="WARP" if not defined WARP goto :closed
 REM A clean exit: check the log for a quota message before deciding.
 call :check_quota
 if defined QHIT set "WHY=quota"
 if defined QHIT goto :quota_rotate
 
-REM Normal close: offer a new IP and resume, or go to the menu.
+REM Normal close: offer a new egress and resume, or go to the menu.
 :closed
 echo OpenCode closed.
-if not defined WARP goto :menu_loop
+if /i "%EGRESS%"=="NONE" goto :menu_loop
+if /i "%EGRESS%"=="WARP" if not defined WARP goto :menu_loop
 echo.
-echo   Ctrl+C is the stop button: one press hands you a new IP,
+echo   Ctrl+C is the stop button: one press hands you a new egress,
 echo   resumes the chat where it stopped and reopens the session.
 REM v2.11: default is N after 5 seconds. ESC inside OpenCode quits the app;
 REM the launcher used to yank the session back with an auto-Y. Since the new
 REM rotation paths are automatic, a clean quit now lands in the menu unless
 REM Y is pressed within the 5s window.
-choice /c yn /n /t 5 /d n /m "  New IP and resume in 5s [Y/N]: "
+set "RC_MSG=New IP and resume in 5s"
+if /i "%EGRESS%"=="TOR" set "RC_MSG=Resume on Tor in 5s"
+if /i "%EGRESS%"=="PROXY" set "RC_MSG=New proxy and resume in 5s"
+choice /c yn /n /t 5 /d n /m "  %RC_MSG% [Y/N]: "
 if errorlevel 2 goto :menu_loop
 set "WHY=stop"
 goto :quota_rotate
@@ -650,14 +807,40 @@ REM opencode exited with a nonzero code and the watcher did not catch it.
 :exit_rotate
 set "WHY=exit"
 
-REM Common exit path for rotation. WHY is one of: exit, quota, stop, watcher.
+REM Common exit path for the egress retry. WHY is one of: exit, quota, stop, watcher.
 REM Only the message for the current WHY value is shown.
 :quota_rotate
 if "%WHY%"=="exit" echo OpenCode exited with code %EC%.
-if "%WHY%"=="quota" echo Free quota reached on this IP.
-if "%WHY%"=="stop" echo Reopening on a new IP.
-if "%WHY%"=="watcher" echo Fatal error caught by the watcher - finding a working IP.
-REM Without WARP there is no rotation possible.
+if "%WHY%"=="quota" echo Free quota reached on this egress.
+if "%WHY%"=="stop" echo Reopening on a new egress.
+if "%WHY%"=="watcher" echo Fatal error caught by the watcher - switching egress.
+
+REM Non-WARP modes: pick a new free proxy or just resume on TOR/NONE.
+if /i "%EGRESS%"=="PROXY" (
+  echo   [proxy] picking a fresh free proxy before resume...
+  call :pick_free_proxy
+  if errorlevel 1 (
+    echo   [!] no working free proxy - back to menu.
+    pause
+    goto :menu_loop
+  )
+  set "RESUME=1"
+  set "COLD=0"
+  goto :resume_and_run
+)
+if /i "%EGRESS%"=="TOR" (
+  call :tor_ready
+  if errorlevel 1 (
+    echo   [!] Tor/Privoxy not answering on :%TOR_HTTP_PORT% - back to menu.
+    pause
+    goto :menu_loop
+  )
+  echo   [tor] same circuit - resume only. Restart Tor for a new exit.
+  set "RESUME=1"
+  set "COLD=0"
+  goto :resume_and_run
+)
+if /i "%EGRESS%"=="NONE" goto :menu_loop
 if not defined WARP goto :menu_loop
 echo Getting a new IP before the next attempt...
 timeout /t 3 /nobreak >nul 2>&1
@@ -735,7 +918,7 @@ set "COLD=0"
 REM the background service holds sockets from the old tunnel, and its env
 REM was captured before this rotation: restart it so the next TUI is born
 REM on this exit IP. this runs on every rotation, not once per machine.
-if defined OC_CMD call "%OC_CMD%" service restart >nul 2>&1
+if defined CAP_SERVICE if defined OC_CMD call "%OC_CMD%" service restart >nul 2>&1
 goto :resume_and_run
 
 REM Not a usable IP yet (no answer, or WARP not on): try again.
@@ -772,9 +955,16 @@ if not defined RESUME goto :run
 echo   sending "%RESUME_MSG%" so the chat picks up where it stopped...
 REM The proxy must answer before the message is sent: a dead route here is
 REM the exact case that used to block forever with both streams discarded.
-call :export_proxy
+if /i "%EGRESS%"=="WARP" (
+  call :export_proxy
+) else if /i "%EGRESS%"=="NONE" (
+  set "HTTP_PROXY="
+  set "HTTPS_PROXY="
+) else (
+  call :export_proxy_active
+)
 if errorlevel 1 (
-    echo   [!] proxy dead - rotating instead of resuming.
+    echo   [!] proxy dead - retrying on the current egress instead of resuming.
     call :resume_tail
     set "WHY=quota"
     goto :quota_rotate
@@ -785,11 +975,14 @@ REM scan_log read the whole file and match the quota error from hours ago.
 set "RZB="
 for %%S in ("%LOGFILE%") do if not "%%~zS"=="" set "RZB=%%~zS"
 REM RESUME_AUTO=1 adds --auto, which approves tool permissions without asking.
-REM --standalone gives the resume a private server born with THIS proxy env,
-REM instead of the long-lived background service that still holds the old
-REM tunnel's sockets. without it the request can wait on a route that is gone.
-set "RARGS=-c --standalone"
-if "%RESUME_AUTO%"=="1" set "RARGS=-c --standalone --auto"
+REM On OpenCode v2, --standalone gives the resume a private server born with
+REM THIS proxy env, instead of the long-lived background service that still
+REM holds the old tunnel's sockets. v1 has no shared service and no such
+REM flag: it prints the help screen and never sends the message. So the flag
+REM is added only when :detect_caps found it in the CLI help.
+set "RARGS=-c"
+if defined CAP_STANDALONE set "RARGS=-c --standalone"
+if "%RESUME_AUTO%"=="1" set "RARGS=%RARGS% --auto"
 call :resume_run %RARGS%
 set "REC=%errorlevel%"
 set "HTTP_PROXY="
@@ -824,6 +1017,32 @@ goto :quota_rotate
 
 REM Option 3: rotate only, without opening opencode. Shows the result and waits.
 :rotate
+if /i "%EGRESS%"=="NONE" (
+  echo.
+  echo   Egress is NONE - nothing to rotate.
+  pause
+  goto :menu_loop
+)
+if /i "%EGRESS%"=="TOR" (
+  echo.
+  echo   TOR mode - restart Tor / Privoxy yourself for a new circuit.
+  echo   Current bridge: http://127.0.0.1:%TOR_HTTP_PORT%
+  pause
+  goto :menu_loop
+)
+if /i "%EGRESS%"=="PROXY" (
+  echo.
+  echo   Picking a new free HTTP proxy...
+  call :pick_free_proxy
+  if errorlevel 1 (
+    echo   [!] no working free proxy found.
+  ) else (
+    echo   New proxy: %ACTIVE_PROXY%
+  )
+  pause
+  goto :menu_loop
+)
+REM WARP path
 if not defined WARP (
   echo.
   echo WARP is not available - nothing to rotate.
@@ -888,7 +1107,7 @@ set "EC=%errorlevel%"
 goto :eof
 
 REM - resume message under a hard time limit
-REM usage: call :resume_run -c --standalone --auto
+REM usage: call :resume_run -c [--standalone] --auto
 REM stdout goes to resume.out, stderr to resume.err, and the whole tree is
 REM killed after RESUME_TIMEOUT seconds. Returns 124 on timeout, otherwise
 REM the real exit code of opencode.
@@ -925,13 +1144,15 @@ REM gets killed, and it kills exactly the tracked PID tree.
 REM The watcher runs in the background (start /b). It reads the log
 REM from SIZE_BEFORE onward, and if the TUI is still alive after a
 REM confirmed fatal error, it writes watch_hit.txt and kills the tree.
-REM Starts the background PowerShell watcher. Does nothing if WATCH is not 1 or WARP is absent.
+REM Starts the background PowerShell watcher. Does nothing if WATCH is not 1,
+REM the egress is NONE, or WARP mode has no WARP.
 :watch_start
 if not "%WATCH%"=="1" goto :eof
-if not defined WARP goto :eof
-REM Clear leftovers from a previous run.
+REM Clear leftovers from a previous run (also in modes that do not watch).
 if exist "%STATE_DIR%\watch_hit.txt" del /f /q "%STATE_DIR%\watch_hit.txt" >nul 2>&1
 if exist "%STATE_DIR%\watch.pid" del /f /q "%STATE_DIR%\watch.pid" >nul 2>&1
+if /i "%EGRESS%"=="NONE" goto :eof
+if /i "%EGRESS%"=="WARP" if not defined WARP goto :eof
 REM Paths and settings passed to the watcher through the environment.
 set "OC_WPIDF=%STATE_DIR%\watch.pid"
 set "OC_TPIDF=%STATE_DIR%\tui.pid"
@@ -1312,6 +1533,29 @@ call :have_exe npm
 if "%HAVE%"=="0" echo   [!] node.js is still not available - install the 32-bit build from nodejs.org.
 exit /b 0
 
+REM - what this opencode build actually supports
+REM The CLI surface moved between v1 and v2: v2 has the shared background
+REM service, "opencode service ..." and the global --standalone flag; v1 has
+REM none of them and rejects the whole command (help screen) when it sees an
+REM unknown flag. Probe the top-level help once, bounded, and set the two
+REM capability flags the rest of the launcher keys off. Only ASCII markers
+REM are searched, so the ANSI/code-page noise in the help output is harmless.
+:detect_caps
+set "CAP_STANDALONE="
+set "CAP_SERVICE="
+if not defined OC_CMD goto :eof
+set "OC_VEXE=%OC_CMD%"
+set "OC_VF=%TEMP%\oc_caps_%RANDOM%%RANDOM%.txt"
+set "OC_VTO=8"
+if exist "%OC_VF%" del /f /q "%OC_VF%" >nul 2>&1
+"%PSX%" -NoProfile -Command "$exe=$env:OC_VEXE; $o=$env:OC_VF; $to=[int]$env:OC_VTO*1000; $line='call '+[char]34+$exe+[char]34+' --help 2>&1'; $p=Start-Process cmd.exe -ArgumentList @('/c',$line) -NoNewWindow -PassThru -RedirectStandardOutput $o; if($p){ $null=$p.Handle; if(-not $p.WaitForExit($to)){ Start-Process taskkill.exe -ArgumentList @('/T','/F','/PID',$p.Id) -WindowStyle Hidden -Wait } }" >nul 2>&1
+if not exist "%OC_VF%" goto :dc_eof
+findstr /i /c:"--standalone" "%OC_VF%" >nul 2>&1 && set "CAP_STANDALONE=1"
+findstr /i /c:"opencode service" "%OC_VF%" >nul 2>&1 && set "CAP_SERVICE=1"
+:dc_eof
+if exist "%OC_VF%" del /f /q "%OC_VF%" >nul 2>&1
+goto :eof
+
 REM - locate opencode anywhere reasonable
 REM Collects every candidate (PATH, npm shim, standalone builds), reads the
 REM version of each and keeps the newest one. A machine can hold an old
@@ -1438,6 +1682,67 @@ set /a NN=NRAW 2>nul
 if not defined NN set "NN=0"
 if %NN% LSS 0 set "NN=0"
 set "%NV%=%NN%"
+goto :eof
+
+REM - offer a newer opencode-ai from npm, once per start, ask first
+REM Installed version comes from "%OC_CMD% --version" (:oc_version), the
+REM latest from "npm view opencode-ai version" over a direct connection: the
+REM proxy env is cleared for the child so WARP is never in the path, and the
+REM call is killed after 15 s. No npm, no network, a timeout or a bad answer
+REM all leave the launcher running exactly as it was. The check is skipped
+REM during an automatic resume and never installs without a Y.
+:oc_update_check
+if defined OCUPD goto :eof
+set "OCUPD=1"
+if not defined OC_CMD goto :eof
+if defined RESUME goto :eof
+call :trace oc_update
+call :have_exe npm
+if not "%HAVE%"=="1" goto :eof
+REM Installed version, read from the binary itself.
+set "OC_CAN=%OC_CMD%"
+call :oc_version
+if not defined CVER goto :eof
+set "OCUPD_CUR=%CVER%"
+REM Latest version from the registry, direct, hard-capped at 15 s.
+set "OCUPD_LAT="
+set "OC_VF=%TEMP%\oc_npmver_%RANDOM%%RANDOM%.txt"
+set "OC_VTO=15"
+if exist "%OC_VF%" del /f /q "%OC_VF%" >nul 2>&1
+set "KEEP_HP=%HTTP_PROXY%"
+set "KEEP_SP=%HTTPS_PROXY%"
+set "HTTP_PROXY="
+set "HTTPS_PROXY="
+"%PSX%" -NoProfile -Command "$o=$env:OC_VF; $to=[int]$env:OC_VTO*1000; $line='call npm view opencode-ai version 2>nul'; $p=Start-Process cmd.exe -ArgumentList @('/c',$line) -NoNewWindow -PassThru -RedirectStandardOutput $o; if(-not $p){ exit 1 }; $null=$p.Handle; if(-not $p.WaitForExit($to)){ Start-Process taskkill.exe -ArgumentList @('/T','/F','/PID',$p.Id) -WindowStyle Hidden -Wait; exit 124 }; exit 0" >nul 2>&1
+set "OCUPD_RC=%errorlevel%"
+set "HTTP_PROXY=%KEEP_HP%"
+set "HTTPS_PROXY=%KEEP_SP%"
+if not "%OCUPD_RC%"=="0" goto :ouc_cleanup
+if not exist "%OC_VF%" goto :ouc_cleanup
+for /f "usebackq delims=" %%v in ("%OC_VF%") do set "OCUPD_LAT=%%v"
+:ouc_cleanup
+if exist "%OC_VF%" del /f /q "%OC_VF%" >nul 2>&1
+if not defined OCUPD_LAT goto :eof
+REM Compare with the same helper the binary picker uses.
+set "VGT=0"
+call :ver_gt "%OCUPD_LAT%" "%OCUPD_CUR%"
+if not "%VGT%"=="1" goto :eof
+echo.
+echo   opencode update available: %OCUPD_CUR% -^> %OCUPD_LAT%
+choice /c YN /n /m "   Update now with npm? [Y/N]: "
+REM errorlevel 0 (no stdin) and 2 (N) both skip the install.
+if not errorlevel 1 goto :eof
+if errorlevel 2 goto :eof
+echo   [update] npm i -g opencode-ai@latest
+call npm i -g opencode-ai@latest
+if errorlevel 1 echo   [!] npm update failed - keeping the current version.
+REM Re-read what the binary reports now and refresh the capability flags.
+set "OC_CAN=%OC_CMD%"
+call :oc_version
+if defined CVER set "OC_VER=%CVER%"
+call :detect_caps
+if defined OC_VER echo   [update] opencode now reports %OC_VER%
+timeout /t 2 /nobreak >nul 2>&1
 goto :eof
 
 REM - v1 binary on a v2 database
@@ -1661,7 +1966,7 @@ REM - close every opencode process so the chat db unlocks
 REM Ask opencode to stop its service, then kill any remaining processes.
 REM The short wait lets the database files unlock before they are moved.
 :stop_opencode
-if defined OC_CMD call "%OC_CMD%" service stop >nul 2>&1
+if defined CAP_SERVICE if defined OC_CMD call "%OC_CMD%" service stop >nul 2>&1
 taskkill /f /im "OpenCode.exe" >nul 2>&1
 taskkill /f /im "opencode.exe" >nul 2>&1
 taskkill /f /im "opencode-cli.exe" >nul 2>&1
@@ -1774,6 +2079,15 @@ set "HTTPS_PROXY=%PROXY%"
 set "no_proxy=%NO_PROXY%"
 exit /b 0
 
+REM - hand ACTIVE_PROXY (TOR / free HTTP) to the child process only
+:export_proxy_active
+if not defined ACTIVE_PROXY exit /b 1
+set "HTTP_PROXY=%ACTIVE_PROXY%"
+set "HTTPS_PROXY=%ACTIVE_PROXY%"
+set "no_proxy=%NO_PROXY%"
+echo   [proxy] process-only: %ACTIVE_PROXY%
+exit /b 0
+
 REM - can the proxy actually carry an https request?
 REM With curl: try the HTTP proxy, then SOCKS5. Without curl: only check
 REM that the port accepts a TCP connection (the 1.5 second wait).
@@ -1789,6 +2103,74 @@ REM TCP-only check, used when curl is missing.
 :proxy_ok_tcp
 "%PSX%" -NoProfile -Command "try{$c=New-Object Net.Sockets.TcpClient;$a=$c.BeginConnect('127.0.0.1',%PROXY_PORT%,$null,$null);if(-not $a.AsyncWaitHandle.WaitOne(1500)){exit 1};$c.EndConnect($a);$c.Close();exit 0}catch{exit 1}" >nul 2>&1
 if errorlevel 1 exit /b 1
+exit /b 0
+
+REM - TOR readiness: Privoxy (or any HTTP->SOCKS bridge) must answer on TOR_HTTP_PORT
+:tor_ready
+"%PSX%" -NoProfile -Command "try{$c=New-Object Net.Sockets.TcpClient;$a=$c.BeginConnect('127.0.0.1',%TOR_HTTP_PORT%,$null,$null);if(-not $a.AsyncWaitHandle.WaitOne(1500)){exit 1};$c.EndConnect($a);$c.Close();exit 0}catch{exit 1}" >nul 2>&1
+if errorlevel 1 exit /b 1
+if "%HAVE_CURL%"=="1" (
+  curl.exe -sS -o nul -f --max-time 8 --noproxy "" --proxy "http://127.0.0.1:%TOR_HTTP_PORT%" "%TRACE_URL%" >nul 2>&1
+  if errorlevel 1 exit /b 1
+)
+exit /b 0
+
+REM - download the free HTTP proxy list and pick the first that answers TRACE
+:pick_free_proxy
+set "ACTIVE_PROXY="
+set "PLIST=%STATE_DIR%\proxy_list.txt"
+if exist "%PLIST%" del /f /q "%PLIST%" >nul 2>&1
+echo   [proxy] fetching free list...
+set "KEEP_HP=%HTTP_PROXY%"
+set "KEEP_SP=%HTTPS_PROXY%"
+set "HTTP_PROXY="
+set "HTTPS_PROXY="
+if "%HAVE_CURL%"=="1" (
+  curl.exe -L -f -s --max-time 20 --noproxy "*" -o "%PLIST%" "%PROXY_LIST_URL%" >nul 2>&1
+) else (
+  set "OC_URL=%PROXY_LIST_URL%"
+  set "OC_OUT=%PLIST%"
+  "%PSX%" -NoProfile -Command "try{[Net.ServicePointManager]::SecurityProtocol=[Net.SecurityProtocolType]::Tls12; Invoke-WebRequest -UseBasicParsing -Uri $env:OC_URL -OutFile $env:OC_OUT -TimeoutSec 20}catch{}" >nul 2>&1
+)
+set "HTTP_PROXY=%KEEP_HP%"
+set "HTTPS_PROXY=%KEEP_SP%"
+if not exist "%PLIST%" exit /b 1
+set "PLSZ=0"
+for %%F in ("%PLIST%") do set "PLSZ=%%~zF"
+if %PLSZ% LSS 20 exit /b 1
+set /a PTRY=0
+for /f "usebackq delims=" %%p in ("%PLIST%") do (
+  set "CAND=%%p"
+  call :pfp_count
+  if errorlevel 1 goto :pfp_fail
+  call :try_one_proxy
+  if not errorlevel 1 goto :pfp_ok
+)
+:pfp_fail
+exit /b 1
+:pfp_ok
+exit /b 0
+
+REM - count one list attempt and enforce PROXY_TRY_MAX
+REM Called from the for body so the counter is not frozen by block expansion.
+:pfp_count
+set /a PTRY+=1
+if %PTRY% GTR %PROXY_TRY_MAX% exit /b 1
+exit /b 0
+
+REM - test one candidate from the free list (HTTP only)
+:try_one_proxy
+REM CAND is either "http://ip:port" or "ip:port"
+set "C=%CAND%"
+echo %C% | findstr /i /b "http://" >nul 2>&1
+if errorlevel 1 set "C=http://%C%"
+echo %C% | findstr /i "socks" >nul 2>&1
+if not errorlevel 1 exit /b 1
+if not "%HAVE_CURL%"=="1" exit /b 1
+curl.exe -sS -o nul -f --max-time %PROXY_PROBE_TIMEOUT% --noproxy "" --proxy "%C%" "%TRACE_URL%" >nul 2>&1
+if errorlevel 1 exit /b 1
+set "ACTIVE_PROXY=%C%"
+echo   [proxy] live: %ACTIVE_PROXY%
 exit /b 0
 
 REM - one launcher at a time
