@@ -1,7 +1,7 @@
 # OpenCode Infinite — launcher handbook (v2.8)
 
 A single-file Windows batch launcher for OpenCode that adds Cloudflare WARP
-egress rotation, dependency bootstrap, chagned-IP auto-resume, watching of
+egress rotation, dependency bootstrap, changed-IP auto-resume, watching of
 fatal errors, an UPD self-updater and a one-click updater bootstrap.
 
 - File: `OpenCode Infinite.bat`
@@ -43,7 +43,7 @@ iwr "https://raw.githubusercontent.com/jeko1107/opencode-infinite/main/OpenCode%
 powershell -NoProfile -ExecutionPolicy Bypass -Command "[Net.ServicePointManager]::SecurityProtocol=[Net.SecurityProtocolType]::Tls12; Invoke-WebRequest -UseBasicParsing -Uri 'https://raw.githubusercontent.com/jeko1107/opencode-infinite/main/OpenCode%%20Infinite.bat' -OutFile \"%USERPROFILE%\Desktop\OpenCode Infinite.bat\""
 ```
 
-After the first run, the launcher verifes itself against the repo on every
+After the first run, the launcher verifies itself against the repo on every
 start: if a newer copy is live on `main`, it says so and, with your approval,
 backs itself up and swaps in the new version on a harmless restart — no laps
 to keep provoking your memory.
@@ -76,7 +76,7 @@ Nothing is installed silently (the UAC prompt is user-visible and once-only).
 | `%LOCALAPPDATA%\opencode-launcher\` | lastfolder, lastip, wcli.log, startup.log, backups | launcher |
 | `%LOCALAPPDATA%\opencode\bin\opencode.exe` | standalone OpenCode install | launcher |
 | `%ProgramFiles%\NodeJS%...` | node 32-bit (WSL/via winget/MSI) | launcher instruction |
-| `%USERPROFILE%\Desktop\opencode_chats_archiv\<stamp>\` | deep-reset archive | launcher |
+| `%USERPROFILE%\Desktop\opencode_chats_archiviate\<stamp>\` | deep-reset archive | launcher |
 | `%TEMP%\Cloudflare_WARP_x64.msi`, `%TEMP%\node_x86.msi` | installer scratch, deleted after use | launcher |
 | `%STATE_DIR%\lock\` | single-instance JIT | launcher |
 
@@ -222,7 +222,7 @@ The only option that touches user files, and it asks first.
 1. stop OpenCode (`service stop` then `taskkill` on its oldes
    PIDs; the database must be lockable)
 2. archive `opencode.db`, `.db-wal`, `.db-shm`, and `storage\` into
-   `Desktop\opencode_chats_archiv\<yyyyMMdd-HHmmss>\` — **robocopy /e /move
+   `Desktop\opencode_chats_archiviate\<yyyyMMdd-HHmmss>\` — **robocopy /e /move
    across volumes, nothing overwritten**
 3. clear tokens (`%USERPROFILE%\.cache\opencode\` + `auth.json`)
 4. start a fresh session with the synth header variables set
@@ -233,7 +233,7 @@ Desktop detection uses `GetFolderPath('Desktop')` first, with fallbacks
 ### Restoring
 
 ```
-move "%USERPROFILE%\Desktop\opencode_chats_archiv\<stamp>\opencode.db" "%USERPROFILE%\.local\share\opencode\"
+move "%USERPROFILE%\Desktop\opencode_chats_archiviate\<stamp>\opencode.db" "%USERPROFILE%\.local\share\opencode\"
 ```
 
 ---
