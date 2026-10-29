@@ -31,16 +31,18 @@ from a bare machine.
 
 ## 2. One-command install
 
-**PowerShell / Windows Terminal (recommended):**
+**PowerShell / Windows Terminal (recommended, single shell — no nested
+PowerShell, no arg-passing quoting pitfalls):**
 
 ```powershell
-iwr "https://raw.githubusercontent.com/jeko1107/opencode-infinite/main/OpenCode%20Infinite.bat" -UseBasicParsing -OutFile "$env:TEMP\oci.bat"; PowerShell -NoProfile -ExecutionPolicy Bypass -Command '[Net.ServicePointManager]::SecurityProtocol=[Net.SecurityProtocolType]::Tls12; Invoke-WebRequest -UseBasicParsing -Uri "https://raw.githubusercontent.com/jeko1107/opencode-infinite/main/OpenCode%20Infinite.bat" -OutFile "$env:USERPROFILE\Desktop\OpenCode Infinite.bat"'; & $env:TEMP\oci.bat
+[Net.ServicePointManager]::SecurityProtocol='Tls12'; iwr https://raw.githubusercontent.com/jeko1107/opencode-infinite/main/OpenCode%20Infinite.bat -UseBasicParsing -OutFile "$env:TEMP\oci.bat"; Copy-Item "$env:TEMP\oci.bat" "$env:USERPROFILE\Desktop\OpenCode Infinite.bat" -Force; & "$env:TEMP\oci.bat"
 ```
 
-`cmd` (one window, classic shell):
+**cmd (classic shell):** `curl.exe` ships with Windows 10 1803+ and Windows 11,
+so this is one line whole:
 
 ```cmd
-powershell -NoProfile -ExecutionPolicy Bypass -Command "[Net.ServicePointManager]::SecurityProtocol=[Net.SecurityProtocolType]::Tls12; Invoke-WebRequest -UseBasicParsing -Uri 'https://raw.githubusercontent.com/jeko1107/opencode-infinite/main/OpenCode%%20Infinite.bat' -OutFile \"%USERPROFILE%\Desktop\OpenCode Infinite.bat\""
+curl.exe -f -L https://raw.githubusercontent.com/jeko1107/opencode-infinite/main/OpenCode%20Infinite.bat -o "%USERPROFILE%\Desktop\OpenCode Infinite.bat" && "%USERPROFILE%\Desktop\OpenCode Infinite.bat"
 ```
 
 After the first run, the launcher verifies itself against the repo on every
