@@ -219,11 +219,13 @@ The check is silent when offline or when the repo is unreachable.
 
 The only option that touches user files, and it asks first.
 
-1. stop OpenCode (`service stop` then `taskkill` on its oldes
+1. stop OpenCode (`service stop` then `taskkill` on its oldest
    PIDs; the database must be lockable)
-2. archive `opencode.db`, `.db-wal`, `.db-shm`, and `storage\` into
-   `Desktop\opencode_chats_archiviate\<yyyyMMdd-HHmmss>\` — **robocopy /e /move
-   across volumes, nothing overwritten**
+2. archive `opencode.db`, `opencode.db-wal`, `opencode.db-shm` with plain
+   `move`, and `storage\` via **robocopy** (`:archive_storage`, exit codes
+   >=8 mean failure) into
+   `Desktop\opencode_chats_archiviate\<yyyyMMdd-HHmmss>\`; a timestamped
+   folder per reset, nothing overwritten
 3. clear tokens (`%USERPROFILE%\.cache\opencode\` + `auth.json`)
 4. start a fresh session with the synth header variables set
 
