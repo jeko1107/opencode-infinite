@@ -1,4 +1,4 @@
-# OpenCode Infinite — launcher handbook (v2.8)
+# OpenCode Infinite — launcher handbook (v2.9)
 
 A single-file Windows batch launcher for OpenCode that adds Cloudflare WARP
 egress rotation, dependency bootstrap, changed-IP auto-resume, watching of
@@ -135,6 +135,23 @@ Install fallback:
 > npm present → `npm install -g opencode-ai`
 > npm absent → standalone build from GitHub releases (x64 or arm64)
 
+### NEW in v2.9 — auto-rotate hardening (the "hit the limit, keep going" fix)
+
+Cloudflare rate-limits rapid `registration new` bursts with HTTP 429. The old
+rotate loop retried 4 times ~6 s apart, hit the throttle, and handed control
+back with an error and a pause. v2.9:
+
+- waits `ROTATE_COOLDOWN` (10 s) between rotate attempts — burst becomes
+  spaced traffic the throttle accepts;
+- after one failed cycle, cools down 60 s and runs **whole new rounds**
+  (`ROTATE_ROUNDS` = 3) — minutes of throttle are ridden out without a
+  single keystroke;
+- only when every round is spent does it pause at the menu with the
+  `wcli.log` pointer;
+- the resume after a successful rotation still reopens the same session
+  (`--continue`) with the auto-resume message, so the chat picks up where
+  the quota error cut it.
+
 ### NEW in v2.8 — 32-bit Windows (x86) support
 
 OpenCode publishes no x86 binary. On real 32-bit Windows the script goes:
@@ -245,6 +262,8 @@ move "%USERPROFILE%\Desktop\opencode_chats_archiviate\<stamp>\opencode.db" "%USE
 | Variable | Default | Meaning |
 |---|---|---|
 | `ROTATE_TRIES_MAX` | `4` | infrastructure rotation attempts |
+| `ROTATE_COOLDOWN` | `10` s | wait between rotate attempts (Cloudflare throttles rapid `registration new` bursts with 429) |
+| `ROTATE_ROUNDS` | `3` | full rotate cycles with a 60 s cool-down between them before giving up (0 = one cycle) |
 | `IP_FIND_MAX` | `0` | hunt-limit: 0 = until one works (Ctrl+C stops) |
 | `WARP_WAIT` | `6` s | settle time after reconnect |
 | `WARP_CALL_TIMEOUT` | `15` s | one warp-cli call cap |

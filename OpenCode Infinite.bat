@@ -2,13 +2,13 @@
 setlocal EnableExtensions
 title OpenCode
 REM ============================================================
-REM  OpenCode launcher  (v2.8)
+REM  OpenCode launcher  (v2.9)
 REM  WARP egress rotation + dependency bootstrap + auto-resume.
 REM
 REM  Usage:
 REM    double-click                          -> folder menu
 REM    drag a folder onto this file          -> opens in that folder
-REM    "OpenCode Infinite v2.8.bat" "D:\work\project"
+REM    "OpenCode Infinite v2.9.bat" "D:\work\project"
 REM                                          -> opens in that folder
 REM
 REM  This script never moves, renames or deletes your chats, your
@@ -93,6 +93,15 @@ REM 0 = keep hunting until one works (Ctrl+C stops the launcher).
 set "IP_FIND_MAX=0"
 REM Seconds to wait after (re)connecting WARP.
 set "WARP_WAIT=6"
+REM Seconds to WAIT between rotate attempts. Cloudflare throttles rapid
+REM "registration new" bursts (429 Too Many Requests); spacing them out
+REM keeps the attempts accepted, which is why a fast burst can end in
+REM errors while the same rotation spaced over seconds works.
+set "ROTATE_COOLDOWN=10"
+REM Full rotate cycles (each up to ROTATE_TRIES_MAX tries) with a 60 s
+REM cool-down between cycles, before the launcher finally gives up and
+REM puts you back at the menu. 0 = one cycle, no repeat rounds.
+set "ROTATE_ROUNDS=3"
 REM Seconds a single warp-cli call may take before it is killed.
 set "WARP_CALL_TIMEOUT=15"
 REM Seconds a single "where" lookup may take before it is killed. A PATH
@@ -186,6 +195,8 @@ if /i "%PROCESSOR_ARCHITECTURE%"=="x86" if not defined PROCESSOR_ARCHITEW6432 se
 REM Validate the numeric settings: invalid values fall back to defaults.
 call :numcfg ROTATE_TRIES_MAX 4
 call :numcfg WARP_WAIT 6
+call :numcfg ROTATE_COOLDOWN 10
+call :numcfg ROTATE_ROUNDS 3
 call :numcfg WARP_CALL_TIMEOUT 15
 call :numcfg WHERE_TIMEOUT 5
 call :numcfg RESUME_TIMEOUT 90
@@ -607,9 +618,17 @@ REM ROTATE_TRIES counts attempts; PROBE_TRIES counts IPs the probe rejected.
 :auto_rotate
 set /a ROTATE_TRIES=0
 set /a PROBE_TRIES=0
+REM rounds: full give-up-and-restart cycles left before the final pause
+set /a RR_LEFT=%ROTATE_ROUNDS%
 :rotate_loop
 set /a ROTATE_TRIES+=1
 if %ROTATE_TRIES% GTR %ROTATE_TRIES_MAX% goto :rotate_fail
+REM Space the attempts out: a plain burst of "registration new" is what
+REM Cloudflare throttles. From the second attempt on, wait first.
+if %ROTATE_TRIES% GTR 1 (
+    echo [%ROTATE_TRIES%] cooling down %ROTATE_COOLDOWN%s...
+    timeout /t %ROTATE_COOLDOWN% /nobreak >nul 2>&1
+)
 REM Drop the current WARP connection and its registration.
 echo [%ROTATE_TRIES%] dropping the old registration...
 call :reg_drop
@@ -672,11 +691,21 @@ REM Not a usable IP yet (no answer, or WARP not on): try again.
 echo [%ROTATE_TRIES%] no verified WARP IP yet, retrying...
 goto :rotate_loop
 
-REM Rotation gave up: remove the probe session and pause for the user to read the log.
+REM Rotation gave up this cycle: cool down and run whole new rounds before
+REM handing control back to the user. Cloudflare throttles come and go in
+REM minutes, and the goal is "hit the limit -> new IP -> keep going" with
+REM no hands on the keyboard.
 :rotate_fail
+if %RR_LEFT% LEQ 0 goto :rotate_pause
+set /a RR_LEFT-=1
+echo   [i] rotation failed - cooling down 60s, then %RR_LEFT% more round(s)...
+timeout /t 60 /nobreak >nul 2>&1
+set /a ROTATE_TRIES=0
+goto :rotate_loop
+:rotate_pause
 REM never leave the probe session behind as the last session
 call "%OC_CMD%" session delete %OC_PROBE_ID% >nul 2>&1
-echo   [!] giving up this cycle - warp-cli errors in %STATE_DIR%\wcli.log
+echo   [!] giving up after all rounds - warp-cli errors in %STATE_DIR%\wcli.log
 pause
 goto :menu_loop
 
