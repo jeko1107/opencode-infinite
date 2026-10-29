@@ -77,7 +77,7 @@ Nothing is installed silently (the UAC prompt is user-visible and once-only).
 | `%USERPROFILE%\.local\share\opencode\` | OpenCode data dir | OpenCode |
 | `%LOCALAPPDATA%\opencode-launcher\` | lastfolder, lastip, wcli.log, startup.log, backups | launcher |
 | `%LOCALAPPDATA%\opencode\bin\opencode.exe` | standalone OpenCode install | launcher |
-| `%ProgramFiles%\NodeJS%...` | node 32-bit (WSL/via winget/MSI) | launcher instruction |
+| `%ProgramFiles%\nodejs\` (winget or pinned x86 MSI) | node.js that the npm route runs on | launcher install |
 | `%USERPROFILE%\Desktop\opencode_chats_archiviate\<stamp>\` | deep-reset archive | launcher |
 | `%TEMP%\Cloudflare_WARP_x64.msi`, `%TEMP%\node_x86.msi` | installer scratch, deleted after use | launcher |
 | `%STATE_DIR%\lock\` | single-instance JIT | launcher |
