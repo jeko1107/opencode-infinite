@@ -1,8 +1,9 @@
-# OpenCode Infinite - launcher handbook (v2.15)
+# OpenCode Infinite - launcher handbook (v2.21)
 
-A single-file Windows batch launcher for OpenCode that adds Cloudflare WARP
-egress rotation, dependency bootstrap, changed-IP auto-resume, watching of
-fatal errors, an UPD self-updater and a one-click updater bootstrap.
+A single-file Windows batch launcher for OpenCode that adds multi-egress
+(Cloudflare WARP, Tor, free/custom HTTP proxy lists, or direct), dependency
+bootstrap, changed-IP auto-resume, watching of fatal errors, an UPD
+self-updater and a one-click updater bootstrap.
 
  - File: `OpenCode Infinite.bat`
  - Target: Windows 10 / 11, **x64, ARM64, and x86 (32-bit) via npm + 32-bit node**
@@ -93,10 +94,14 @@ environment variables, which is what keeps it universal.
 |---|---|---|
 | `[1]` | Fresh start | new IP (ensure-different) + open a new session |
 | `[2]` | Continue | same IP, same session |
-| `[3]` | Change IP | rotates the WARP exit IP, back to menu |
+| `[3]` | Change IP | rotates the current egress: WARP exit IP, TOR fresh circuit, PROXY next candidate; mode NONE has nothing to rotate |
 | `[4]` | Folder | change working folder |
 | `[5]` | Deep reset | kill OpenCode, archive chats to the Desktop, clear tokens, fresh session |
 | `[6]` | Exit | closes the lock and leaves |
+
+Before the main menu appears, the launcher asks the **egress mode** once:
+`[1] WARP`, `[2] TOR`, `[3] PROXY`, `[4] NONE` - the proxy lives only in
+the opencode process environment, system traffic stays direct.
 
 After **any** run exit, the launcher checks the log and, if this IP is dead:
 rotates and reopens the session automatically. Full cycle needs **one Ctrl+C
@@ -136,6 +141,63 @@ Install fallback:
 
 > npm present -> `npm install -g opencode-ai`
 > npm absent -> standalone build from GitHub releases (x64 or arm64)
+
+### NEW in v2.16 - v2.21 - TOR egress, custom proxy lists, hardening
+
+**Egress modes (since v2.17).** After the working folder is fixed the menu
+asks once: `[1] WARP` (Cloudflare WARP proxy mode, rotation supported),
+`[2] TOR` (local Tor served as an HTTP proxy, auto-setup), `[3] PROXY`
+(free HTTP list, or your own), `[4] NONE` (direct). The choice lives only
+in the opencode process environment - system traffic always stays direct.
+
+**TOR egress (v2.18, v2.19).** With nothing installed the launcher
+downloads the portable **Tor Expert Bundle** once
+(`aus1.torproject.org` downloads.json first, `dist.torproject.org` index
+scrape as fallback, size-gated, unpacked by the built-in `tar.exe`), starts
+it hidden on `TOR_SOCKS_PORT`, and exposes it as an **HTTP proxy on
+`TOR_HTTP_PORT`** through a tiny built-in bridge process - so no Privoxy
+install is needed. Details:
+
+ - no installer, no UAC, no service; the bundle lives in
+   `%LOCALAPPDATA%\opencode-launcher\tor\`;
+ - a Tor already running (Tor Browser, or any user tor on the SOCKS port)
+   is used as it is and **never killed**: at exit `:tor_stop` (v2.20) only
+   stops tor processes whose image path lives inside that private bundle
+   directory, plus bridge processes carrying the `OC_TORBRIDGE_PS`
+   command-line marker - pid files that match nothing are stale garbage;
+ - v2.19 passes `-f <torrc>` with forward-slash paths (any code page and
+   spaces survive), the bridge is a per-connection runspace
+   HTTP(S)-over-SOCKS5h forwarder - one stuck handler can never freeze
+   the others - and the SOCKS reply address is consumed with the correct
+   ATYP length handling;
+ - the wait gate checks the whole chain **through the bridge** (a live
+   SOCKS port with a dead bridge is not answered as ready), bounded by
+   `TOR_BOOTSTRAP_WAIT`.
+
+**Custom proxy list (v2.21).** Set `PROXY_LIST_URL` to a raw URL or a
+local `file:///C:/path/lista.txt` and the PROXY mode eats that one:
+
+ - one proxy per line; `ip:port`, `http://ip:port` and `https://ip:port`
+   all work (an `https://` line is not mangled);
+ - lines starting with `#` or `;` are comments - they are skipped without
+   counting toward `PROXY_TRY_MAX` and without spending a probe;
+ - a UTF-8 BOM written by Notepad is stripped before parsing, so the
+   first line still parses;
+ - the download size gate is now `PROXY_LIST_MIN_BYTES` (default 20,
+   **0 = off**), so a short personal list is no longer rejected; an empty
+   file still finds no candidates and is reported normally.
+
+**Hardening (v2.20).** The self-update curl branch now downloads the same
+SHA-pinned URL as everything else; every SOCKS reply read in the bridge is
+exact-length (a split reply cannot leave stale bytes for the TLS
+handshake - the old `SEC_E_INVALID_TOKEN` class of failure); the request
+head read carries an 8 s timeout so a silent local client cannot park its
+handler (the value is restored before the pumps, so idle SSE/websocket
+tunnels still sit open indefinitely); appended `wcli.log` is bounded by a
+trim step (last 400 lines above 200 KB).
+
+**Self-update is opt-in (v2.16).** `UPDATE_CHECK` defaults to `0`; run
+`[upd]`, `Update launcher.bat`, or set `UPDATE_CHECK=1` to keep it on.
 
 ### NEW in v2.12 - update channel is CDN-proof, picker ESC chain, picker logs
 
@@ -348,8 +410,16 @@ move "%USERPROFILE%\Desktop\opencode_chats_archiviate\<stamp>\opencode.db" "%USE
 | `RESUME_TIMEOUT` | `90` s | hard cap on the resume message |
 | `PROBE_MODEL` | `opencode/deepseek-v4.1-flash-free` | cheap model for the IP probe |
 | `PROBE` | `1` | probe candidate IPs |
-| `UPDATE_CHECK` | `1` | [upd] self-update on start |
+| `UPDATE_CHECK` | `0` | self-update on start (`[upd]` and `Update launcher.bat` always update, whatever this says) |
 | `PROXY_PORT` | `40000` | WARP local proxy port |
+| `TOR_SOCKS_PORT` | `9050` | portable Tor SOCKS port (auto-skip: a tor already listening here is used as it is) |
+| `TOR_HTTP_PORT` | `8118` | local HTTP proxy that fronts the SOCKS port (the built-in bridge, or any Privoxy) |
+| `TOR_AUTO_INSTALL` | `1` | download the portable Tor bundle when nothing answers on the ports |
+| `TOR_BOOTSTRAP_WAIT` | `120` s | bootstrap wait cap before failing the TOR setup |
+| `PROXY_LIST_URL` | ProxyScrape free list | your own list: a raw URL, or `file:///C:/path/lista.txt`; `ip:port` / `http(s)://ip:port` lines, `#`/`;` comments skipped |
+| `PROXY_LIST_MIN_BYTES` | `20` | download size gate for the list; `0` = off, so a short custom list is accepted |
+| `PROXY_TRY_MAX` | `12` | candidates tried per rotation before giving up |
+| `PROXY_PROBE_TIMEOUT` | `8` s | one probe against one candidate proxy |
 
 ---
 
@@ -383,6 +453,8 @@ move "%USERPROFILE%\Desktop\opencode_chats_archiviate\<stamp>\opencode.db" "%USE
 | `[3]` opens the modern dialog, ESC closes it and the classic opens right after | expected v2.15 behaviour: the modern cancel is the classic fallback. `install.log` shows `picker: modern returned nothing` followed by `picker: classic dialog starting`; cancelling the classic asks `Try again? [Y/N]` |
 | `install.log` keeps saying `picker: nothing from the modern dialog` | you are on pre-v2.15, where the interop types were internal and the modern pick never landed. Update with `[upd]` (or `Update launcher.bat`) |
 | `Invoke-WebRequest : positional parameter not found` while installing | you copied the old README one-liner that nests `PowerShell -Command`; PS 5.1 strips the inner quotes and the URL arrives split. Use the one-line install in section 2 (single shell, `Copy-Item`, no nested `-Command`) |
+| my custom `PROXY_LIST_URL` list is ignored / "proxy list too small" | one proxy per line, `ip:port` or `http(s)://ip:port`; a short personal list hits the download gate - set `PROXY_LIST_MIN_BYTES=0`. `#`/`;` comment lines and a Notepad UTF-8 BOM are handled (v2.21) |
+| TOR mode: `still not up after 120s` | the first bootstrap can be slower than the cap - raise `TOR_BOOTSTRAP_WAIT`. The last tor.log lines are printed next to the message; the log lives in `%LOCALAPPDATA%\opencode-launcher\tor\` |
 | first paint shows `Another OpenCode launcher seems to be running. Continue anyway? [Y/N]` | a leftover lock in `%LOCALAPPDATA%\opencode-launcher\lock\` (usually a previous Ctrl+C). `Y` is safe - it is only an anti-double-open warning |
 | `Terminate batch job (Y/N)?` | Windows is asking because Ctrl+C was pressed inside a batch context. Answer no - on a Spanish system the keys are S/N, and pressing N is what keeps the launcher running while S kills it there |
 
@@ -394,8 +466,8 @@ move "%USERPROFILE%\Desktop\opencode_chats_archiviate\<stamp>\opencode.db" "%USE
 certutil -hashfile "OpenCode Infinite.bat" SHA256
 ```
 
-The v2.15 file hashes to
-`7B8C585F67FABB743FE9FF21F796038D696EE75A39D26E62C803C354666767B4`.
+The v2.21 file hashes to
+`838B3152B940AAFDF2FC4774A6C533F96471344320332A12BAF3C27439E90AE4`.
 A different hash means you are not on the shipped copy - re-download it
 with the one-line install in section 2. Stale copies usually trace back
 to mid-download truncation, or someone else's half-broken mirror.
@@ -412,11 +484,15 @@ use, and those patterns are here because a working launcher needs them:
 | download to `%TEMP%` then execute | this is exactly how the launcher installs WARP/node/OpenCode when missing | download-and-execute is the textbook dropper flow |
 | `start "" /b "%PSX%" ...` detached PowerShell children | the TUI wrapper, the watcher, every helper call | spawning hidden PowerShell from a batch |
 | `if ... ( ... )` blocks with delayed expansion, `^|` `^&` escapes, `>nul 2>&1` | batch needs this to be robust inside `if`/`for` blocks | "obfuscated" = lots of escapes in one file |
-| one 1,900-line `.bat` with ~80 `call :label` targets | every feature lives in its own subroutine | size + goto density beats the scanner's normal-file heuristics |
+| one ~3,100-line `.bat` with ~100 `call :label` targets | every feature lives in its own subroutine | size + goto density beats the scanner's normal-file heuristics |
 
-The complete outbound footprint is four public hosts -
-`raw.githubusercontent.com`, `github.com` (OpenCode release zip),
-`downloads.cloudflareclient.com` (WARP MSI), `nodejs.org` (32-bit node MSI).
+The complete outbound footprint is these public hosts -
+`raw.githubusercontent.com` + `github.com` (launcher updates, OpenCode
+release zip), `downloads.cloudflareclient.com` (WARP MSI), `nodejs.org`
+(32-bit node MSI), `aus1.torproject.org` + `dist.torproject.org`
+(portable Tor bundle, TOR mode only), `www.cloudflare.com` (the
+`cdn-cgi/trace` IP check), `api.proxyscrape.com` or whatever
+`PROXY_LIST_URL` points to (PROXY mode - your own list, your own host).
 No base64/`-EncodedCommand` blobs, no registry writes, no persistence keys,
 no startup folders, no scheduled tasks, no self-copy into system paths,
 and it deletes its own `%TEMP%` scratch on every exit.

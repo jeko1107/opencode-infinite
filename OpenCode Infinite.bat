@@ -2,14 +2,14 @@
 setlocal EnableExtensions
 title OpenCode
 REM ============================================================
-REM  OpenCode launcher  (v2.16)
+REM  OpenCode launcher  (v2.21)
 REM  Multi-egress (WARP / TOR / free HTTP) + dependency bootstrap
 REM  + auto-resume.
 REM
 REM  Usage:
 REM    double-click                          -> folder menu
 REM    drag a folder onto this file          -> opens in that folder
-REM    "OpenCode Infinite v2.16.bat" "D:\work\project"
+REM    "OpenCode Infinite v2.21.bat" "D:\work\project"
 REM                                          -> opens in that folder
 REM
 REM  This script never moves, renames or deletes your chats, your
@@ -58,6 +58,15 @@ REM      [3] PROXY  - free HTTP proxies from the ProxyScrape list
 REM                   (process-only; dead ones are skipped)
 REM      [4] NONE   - direct, no proxy
 REM
+REM  - TOR with nothing installed: [2] sets itself up. The portable
+REM    Tor Expert Bundle (a tar.gz: no installer, no UAC, no service)
+REM    is downloaded once into the launcher state folder, started
+REM    hidden, and exposed as an HTTP proxy through a tiny built-in
+REM    bridge process, so no Privoxy install is needed. A Tor already
+REM    running (Tor Browser or a user tor on the SOCKS port) is used
+REM    as it is and never killed by this launcher. All of it is
+REM    removed from memory again on exit, files stay portable.
+REM
 REM  - In TOR mode no WARP rotation runs: a retry restarts the
 REM    resume on the same circuit. In PROXY mode a retry picks
 REM    another free proxy. NONE returns to the menu.
@@ -74,7 +83,28 @@ REM
 REM  - Verifies the route, not just the tunnel: IP fetches ignore
 REM    stale HTTP_PROXY/HTTPS_PROXY, and optionally each candidate IP
 REM    gets one cheap probe message on a throwaway session so burned
-REM    IPs are skipped. IP_FIND_MAX=0 keeps hunting until one works.
+REM    IPs are skipped. The probe runs standalone (its own server born
+REM    with the NEW proxy env): a plain run would be answered by the
+REM    shared background service, which still holds the old tunnel's
+REM    sockets, and then every brand-new IP probes as burned. Only
+REM    limit-shaped answers mark an IP burned; any other probe failure
+REM    stops the hunt and is printed, because rotation cannot fix a
+REM    broken probe. IP_FIND_MAX=0 keeps hunting until one works.
+REM
+REM  - TOR mode is fully self-contained: the launcher either uses a Tor
+REM    already running (never touches or kills it) or downloads the
+REM    portable Tor Expert Bundle once, runs it hidden, and exposes it
+REM    as an HTTP proxy through a tiny built-in bridge, so no Privoxy
+REM    install is needed. The spawn is verified live two seconds in, so
+REM    a tor that refuses its config fails loudly with its own reason
+REM    instead of leaving a dead pid behind; the torrc carries the
+REM    Windows paths as forward slashes because tor treats a backslash
+REM    inside double quotes as an escape sequence; the bridge serves
+REM    every connection in its own PowerShell runspace (worker threads
+REM    cannot run PowerShell functions), so parallel HTTP traffic is
+REM    served correctly. Bugs there read as a hang at the TOR readiness
+REM    prompt, which is why each piece fails loudly with a printed
+REM    reason now.
 REM
 REM  - Watches the log while opencode runs. A fatal line (drain
 REM    failure, usage limit, rate limit, quota, credits) kills the TUI
@@ -153,6 +183,11 @@ set "PROBE_MODEL=opencode/deepseek-v4.1-flash-free"
 REM PROBE=0 skips the probe entirely (IPs are accepted without testing).
 REM Default ON so burned free-tier IPs are skipped before resume.
 set "PROBE=1"
+REM How many probe failures that are NOT a limit error are tolerated
+REM before the hunt stops and asks. Catches a retired PROBE_MODEL id or
+REM an auth problem: a broken probe that would otherwise read every
+REM fresh IP as burned and rotate forever.
+set "PROBE_BROKEN_MAX=3"
 REM 1 = every start checks the GitHub repo for a newer launcher,
 REM offers to replace this script (backup first, ask first).
 REM 0 = never touches the network for the launcher itself.
@@ -167,8 +202,25 @@ set "TOR_SOCKS_PORT=9050"
 REM Privoxy (or any HTTP->SOCKS bridge) listen port. Required because
 REM OpenCode/Bun does not speak SOCKS5 natively; only HTTP_PROXY works.
 set "TOR_HTTP_PORT=8118"
-REM ProxyScrape free list (protocolipport text). Only http:// entries used.
+REM [2] TOR auto-setup (v2.18): when nothing answers on the TOR ports,
+REM download the portable Tor Expert Bundle once, run it hidden, and
+REM expose it through the built-in bridge on TOR_HTTP_PORT. 0 = never
+REM download; the launcher then behaves like older versions.
+set "TOR_AUTO_INSTALL=1"
+REM Seconds to wait for Tor to finish bootstrapping. The first run is
+REM slower; later runs usually need a fraction of this.
+set "TOR_BOOTSTRAP_WAIT=120"
+REM The free proxy list (protocolipport text, one proxy per line).
+REM Point it at your own list to use that one instead: a raw URL, or a
+REM local file through curl's file:/// URL form. Lines may be "ip:port",
+REM "http://ip:port" or "https://ip:port"; lines starting with # or ;
+REM are comments and are skipped (v2.21).
 set "PROXY_LIST_URL=https://api.proxyscrape.com/v4/free-proxy-list/get?request=display_proxies&protocol=http&proxy_format=protocolipport&format=text"
+REM Minimum bytes the downloaded list must have before the launcher
+REM trusts it (a tiny error page is not a list). v2.21: configurable,
+REM so a short custom list can pass the gate; 0 turns the gate off and
+REM accepts any downloaded file.
+set "PROXY_LIST_MIN_BYTES=20"
 REM How many free proxies to try before giving up (per rotate).
 set "PROXY_TRY_MAX=12"
 REM Seconds a single free-proxy probe may take.
@@ -199,6 +251,17 @@ REM EGRESS mode: WARP | TOR | PROXY | NONE (set by the menu after the folder)
 set "EGRESS=WARP"
 REM ACTIVE_PROXY holds the exact URL handed to opencode (process-only).
 set "ACTIVE_PROXY="
+REM TOR portable setup runtime state (v2.18). TOR_DIR keeps the portable
+REM Tor bundle and is the stop-identity root: at exit (v2.20) only tor
+REM processes whose image path lives inside TOR_DIR, plus bridge
+REM processes carrying the OC_TORBRIDGE_PS marker, are ever stopped -
+REM so a Tor or a bridge already running before the launcher is never
+REM touched and never killed. OURTOR / OURBRIDGE mean "the launcher
+REM started it this session".
+set "TOR_DIR=%LOCALAPPDATA%\opencode-launcher\tor"
+set "TOR_EXE="
+set "OURTOR="
+set "OURBRIDGE="
 
 REM UTF-8 console: folder paths in any system language survive the
 REM write/read round trip in lastfolder.txt
@@ -263,15 +326,22 @@ call :numcfg WHERE_TIMEOUT 5
 call :numcfg RESUME_TIMEOUT 90
 call :numcfg PROXY_TRY_MAX 12
 call :numcfg PROXY_PROBE_TIMEOUT 8
+REM 0 is also valid here: "no size gate on a custom list"
+call :numcfg0 PROXY_LIST_MIN_BYTES 20
 call :numcfg TOR_SOCKS_PORT 9050
 call :numcfg TOR_HTTP_PORT 8118
 REM this one may legitimately be 0 (hunt with no limit)
 call :numcfg0 IP_FIND_MAX 0
+call :numcfg PROBE_BROKEN_MAX 3
+call :numcfg TOR_BOOTSTRAP_WAIT 120
 
 REM Create the state folder if it is missing, then check the single-instance lock.
 if not exist "%STATE_DIR%" mkdir "%STATE_DIR%" >nul 2>&1
 REM Fresh trace for this run: the last line names the stage that froze.
 if exist "%STATE_DIR%\startup.log" del /f /q "%STATE_DIR%\startup.log" >nul 2>&1
+REM v2.20: bound wcli.log too (it only grows on warp-cli failures, but a
+REM dying daemon can fail for weeks - keep the last 400 lines above 200 KB)
+call :trim_log "%STATE_DIR%\wcli.log" 200000 400
 call :lock_check
 
 REM Once per start: check the repo for a newer launcher. Silent when
@@ -452,7 +522,8 @@ echo   Choose egress for OpenCode only (system traffic stays direct)
 echo ============================================================
 echo.
 echo   [1] WARP     - Cloudflare WARP proxy mode (rotation supported)
-echo   [2] TOR      - local Tor SOCKS via HTTP bridge on :%TOR_HTTP_PORT%
+echo   [2] TOR      - local Tor + built-in bridge on :%TOR_HTTP_PORT%
+echo                  (auto-installs a portable Tor, nothing to set up)
 echo   [3] PROXY    - free HTTP proxies (ProxyScrape list)
 echo   [4] NONE     - direct, no proxy
 echo.
@@ -697,10 +768,9 @@ if /i "%EGRESS%"=="WARP" (
   goto :run_gate_ok
 )
 if /i "%EGRESS%"=="TOR" (
-  call :tor_ready
+  call :tor_gate
   if errorlevel 1 (
-    echo   [!] Tor/Privoxy not answering on :%TOR_HTTP_PORT%.
-    echo       Start Tor + Privoxy ^(or an HTTP-^>SOCKS bridge^) first.
+    echo   [!] Tor did not get ready.
     choice /c YN /n /m "   Continue direct? [Y/N]: "
     if errorlevel 2 goto :menu_loop
     goto :run_noproxy
@@ -829,16 +899,16 @@ if /i "%EGRESS%"=="PROXY" (
   goto :resume_and_run
 )
 if /i "%EGRESS%"=="TOR" (
-  call :tor_ready
-  if errorlevel 1 (
-    echo   [!] Tor/Privoxy not answering on :%TOR_HTTP_PORT% - back to menu.
-    pause
-    goto :menu_loop
+  call :tor_gate
+  if not errorlevel 1 (
+    echo   [tor] resume on Tor.
+    set "RESUME=1"
+    set "COLD=0"
+    goto :resume_and_run
   )
-  echo   [tor] same circuit - resume only. Restart Tor for a new exit.
-  set "RESUME=1"
-  set "COLD=0"
-  goto :resume_and_run
+  echo   [!] Tor did not get ready - back to menu.
+  pause
+  goto :menu_loop
 )
 if /i "%EGRESS%"=="NONE" goto :menu_loop
 if not defined WARP goto :menu_loop
@@ -853,6 +923,7 @@ REM ROTATE_TRIES counts attempts; PROBE_TRIES counts IPs the probe rejected.
 :auto_rotate
 set /a ROTATE_TRIES=0
 set /a PROBE_TRIES=0
+set "PBROKEN=0"
 REM rounds: full give-up-and-restart cycles left before the final pause
 set /a RR_LEFT=%ROTATE_ROUNDS%
 :rotate_loop
@@ -894,7 +965,20 @@ if "%PROBE%"=="0" goto :rotate_good
 echo [%ROTATE_TRIES%] probing if this IP can still talk...
 call :probe_once
 if not errorlevel 1 goto :rotate_good
-REM The probe failed: this IP is burned. Undo the attempt count and count the probe.
+REM Classify the miss: only a limit-shaped answer marks the IP burned.
+REM Anything else is a broken probe (retired model id, auth, a CLI
+REM change), and no amount of IP rotation fixes that.
+if /i not "%PCLASS%"=="broken" goto :probe_miss_burned
+set /a PBROKEN+=1
+echo   [!] probe failed for a reason that is NOT a limit - attempt %PBROKEN% of %PROBE_BROKEN_MAX%. Last output:
+call :probe_print
+if %PBROKEN% GEQ %PROBE_BROKEN_MAX% goto :probe_broken_stop
+set /a ROTATE_TRIES-=1
+goto :rotate_loop
+:probe_miss_burned
+REM The probe hit the limit on this fresh IP: the IP is burned. Undo the
+REM attempt count and count the probe instead.
+set "PBROKEN=0"
 set /a ROTATE_TRIES-=1
 set /a PROBE_TRIES+=1
 REM IP_FIND_MAX=0 means no limit on probes. Otherwise stop after the limit.
@@ -907,10 +991,30 @@ goto :rotate_loop
 echo.
 echo   [!] %PROBE_TRIES% IPs probed, every one of them already burned.
 goto :rotate_fail
+:probe_broken_stop
+echo.
+echo   [!] the probe failed %PBROKEN% times and none of them was a limit error.
+echo       The probe itself is broken, not every IP: a retired PROBE_MODEL id,
+echo       an auth error or a CLI change. Rotation cannot fix that.
+echo       Check PROBE_MODEL in the settings block, or run the probe model once
+echo       by hand to see the real error.
+choice /c YN /n /m "   Continue WITHOUT the probe this session (IPs accepted untested)? [Y/N]: "
+if errorlevel 2 goto :pbs_quit
+echo   [i] probe off for this session - IPs are accepted on WARP-trace proof
+echo       only, and the resume's own limit check keeps catching burned ones.
+set "PROBE=0"
+set "PBROKEN=0"
+set /a ROTATE_TRIES-=1
+goto :rotate_loop
+:pbs_quit
+call "%OC_CMD%" session delete %OC_PROBE_ID% >nul 2>&1
+pause
+goto :menu_loop
 
 REM A verified IP that passed the probe: save it, mark the resume, and resume the chat.
 :rotate_good
 echo [%ROTATE_TRIES%] IP %IPN% works.
+set "PBROKEN=0"
 >"%STATE_DIR%\lastip.txt" echo %IPN%
 set "IP=%IPN%"
 set "RESUME=1"
@@ -1025,6 +1129,15 @@ if /i "%EGRESS%"=="NONE" (
 )
 if /i "%EGRESS%"=="TOR" (
   echo.
+  if defined OURTOR (
+    echo   Restarting the launcher-managed Tor for a new circuit...
+    call :tor_stop
+    call :tor_start_if_needed
+    call :tor_wait_up
+    echo   New circuit: Tor is serving on :%TOR_HTTP_PORT% again.
+    pause
+    goto :menu_loop
+  )
   echo   TOR mode - restart Tor / Privoxy yourself for a new circuit.
   echo   Current bridge: http://127.0.0.1:%TOR_HTTP_PORT%
   pause
@@ -1193,31 +1306,65 @@ if exist "%SCANF%" del /f /q "%SCANF%" >nul 2>&1
 goto :eof
 
 REM - one probe message on the throwaway session
-REM exit 0 = the IP can talk, exit 1 = burned or opencode failed.
-REM Sends one short message through the proxy to the probe session.
-REM Fails if opencode returns an error or the log shows a fatal line.
+REM exit 0 = the IP can talk, exit 1 = failure. PCLASS is set for the caller:
+REM "burned" = a limit-shaped answer, the IP is spent; "broken" = the probe
+REM itself failed for another reason (a retired PROBE_MODEL id, an auth
+REM error, a CLI change) and no rotation can fix that.
+REM The probe NEVER rides the shared background service: on v2 a plain "run"
+REM connects to the long-lived service process, which was born with the OLD
+REM tunnel's sockets and proxy env. Every brand-new IP would then be probed
+REM from the burned route and read as burned forever. When --standalone
+REM exists (v2), the probe gets its own server born with THIS proxy env,
+REM exactly like the resume does; v1 has no such flag and keeps the old call.
 :probe_once
+set "PCLASS=burned"
 set "HTTP_PROXY=%PROXY%"
 set "HTTPS_PROXY=%PROXY%"
+set "POUTF=%STATE_DIR%\probe.out"
+set "PERRF=%STATE_DIR%\probe.err"
+set "PARGS=run -m %PROBE_MODEL% -s %OC_PROBE_ID% --auto"
+if defined CAP_STANDALONE set "PARGS=%PARGS% --standalone"
+if exist "%POUTF%" del /f /q "%POUTF%" >nul 2>&1
+if exist "%PERRF%" del /f /q "%PERRF%" >nul 2>&1
+REM No usable offset = no verdict from the log. Never scan the whole file:
+REM it still holds every old quota error and would fail every probe.
 set "PZB="
 for %%S in ("%LOGFILE%") do if not "%%~zS"=="" set "PZB=%%~zS"
-call "%OC_CMD%" run -m %PROBE_MODEL% -s %OC_PROBE_ID% --auto "reply with just: ok" >nul 2>&1
+call "%OC_CMD%" %PARGS% "reply with just: ok" >"%POUTF%" 2>"%PERRF%"
 set "PEC=%errorlevel%"
 set "HTTP_PROXY="
 set "HTTPS_PROXY="
-REM No usable offset = no verdict from the log. Never scan the whole file:
-REM it still holds every old quota error and would fail every probe.
-if not defined PZB goto :probe_noscan
-call :scan_log %PZB%
-if defined FHIT goto :probe_bad
-:probe_noscan
-if not "%PEC%"=="0" goto :probe_bad
+if not "%PEC%"=="0" goto :probe_classify
+REM The CLI exited clean, but a limit answer can still reach the log a
+REM moment later (flush race). Settle once, then judge only what arrived:
+REM the log delta, and limit text inside the probe's own captured output.
+set "PBURNED="
+if defined PZB call :scan_log %PZB%
+if defined FHIT set "PBURNED=1"
+if not defined PBURNED if exist "%POUTF%" findstr /i /c:"free usage limit" /c:"usage limit reached" /c:"out of usage" /c:"insufficient credits" /c:"payment required" /c:"rate limit" "%POUTF%" >nul 2>&1 && set "PBURNED=1"
+if defined PBURNED goto :probe_bad
 REM pass: delete the probe session so --continue points at the chat
 call "%OC_CMD%" session delete %OC_PROBE_ID% >nul 2>&1
 exit /b 0
-REM Probe failed: exit with code 1.
+REM Failure: decide whether it was a limit error or a broken probe.
+:probe_classify
+set "PBURNED="
+if exist "%PERRF%" findstr /i /c:"free usage limit" /c:"usage limit reached" /c:"out of usage" /c:"insufficient credits" /c:"payment required" /c:"rate limit" "%PERRF%" >nul 2>&1 && set "PBURNED=1"
+if not defined PBURNED if exist "%POUTF%" findstr /i /c:"free usage limit" /c:"usage limit reached" /c:"out of usage" /c:"insufficient credits" /c:"payment required" /c:"rate limit" "%POUTF%" >nul 2>&1 && set "PBURNED=1"
 :probe_bad
+if not defined PBURNED set "PCLASS=broken"
+REM Delete the probe session on both paths, so it never lingers as the
+REM newest session while the hunt keeps going.
+call "%OC_CMD%" session delete %OC_PROBE_ID% >nul 2>&1
 exit /b 1
+
+REM - show the last output the probe produced (failure reports only)
+:probe_print
+set "OC_TF=%STATE_DIR%\probe.err"
+"%PSX%" -NoProfile -Command "if(Test-Path -LiteralPath $env:OC_TF){ Get-Content -LiteralPath $env:OC_TF -Tail 4 | ForEach-Object { '     ' + $_ } }"
+set "OC_TF=%STATE_DIR%\probe.out"
+"%PSX%" -NoProfile -Command "if(Test-Path -LiteralPath $env:OC_TF){ Get-Content -LiteralPath $env:OC_TF -Tail 4 | ForEach-Object { '     ' + $_ } }"
+goto :eof
 
 REM - locate warp-cli anywhere reasonable
 REM Search in order: PATH, then the standard install folders.
@@ -1839,6 +1986,273 @@ set "REGNEW=1"
 :rn_done
 goto :eof
 
+REM ============================================================
+REM  4a) TOR portable auto-setup [2] ----------------------------
+REM ============================================================
+REM Option [2] TOR with nothing installed: download the portable
+REM Tor Expert Bundle once (tar.gz, no installer, no UAC, no
+REM service), start it hidden on TOR_SOCKS_PORT, and expose it as an
+REM HTTP proxy on TOR_HTTP_PORT through a tiny built-in bridge
+REM process, so no Privoxy install is needed. A Tor already running
+REM (Tor Browser or a user tor on the SOCKS port) is used as it is and
+REM never killed by the launcher: at exit :tor_stop only ever stops
+REM processes running from inside TOR_DIR (v2.20 identity rule).
+
+REM - one-stop gate for the TOR egress: 0 = usable, 1 = give up
+:tor_gate
+call :trace tor_gate
+call :tor_ready
+if not errorlevel 1 goto :tg_ok
+if not "%TOR_AUTO_INSTALL%"=="1" goto :tg_fail
+echo   [tor] nothing answering on :%TOR_HTTP_PORT% - portable setup starting...
+call :tor_install_if_missing
+if not defined TOR_EXE goto :tg_missing
+call :tor_start_if_needed
+if errorlevel 1 goto :tg_fail
+call :tor_wait_up
+call :tor_ready
+if not errorlevel 1 goto :tg_ok
+:tg_fail
+echo   [!] Tor did not become ready - the reason is in "%TOR_DIR%\tor.log"
+call :tor_log_tail
+exit /b 1
+:tg_missing
+echo   [!] the Tor download did not land. Grab it by hand:
+echo       https://dist.torproject.org/torbrowser/
+echo       unpack the tor-expert-bundle tar.gz into "%TOR_DIR%",
+echo       so that "%TOR_DIR%\Tor\tor.exe" exists, then run this again.
+exit /b 1
+:tg_ok
+echo   [tor] ready: SOCKS :%TOR_SOCKS_PORT% - HTTP :%TOR_HTTP_PORT%.
+exit /b 0
+
+REM - locate tor.exe under TOR_DIR: fixed bundle layouts first, then one
+REM bounded recurse. Sets TOR_EXE, or leaves it empty when nothing is there.
+:tor_find_exe
+if defined TOR_EXE goto :eof
+set "TOR_EXE="
+if exist "%TOR_DIR%\Tor\tor.exe" set "TOR_EXE=%TOR_DIR%\Tor\tor.exe"
+if not defined TOR_EXE if exist "%TOR_DIR%\tor.exe" set "TOR_EXE=%TOR_DIR%\tor.exe"
+if defined TOR_EXE goto :eof
+set "OC_TORDIR=%TOR_DIR%"
+for /f "usebackq delims=" %%t in (`%PSX% -NoProfile -Command "try{ $f=Get-ChildItem -LiteralPath $env:OC_TORDIR -Recurse -Filter tor.exe -ErrorAction SilentlyContinue | Select-Object -First 1; if($f){ $f.FullName } }catch{}"`) do set "TOR_EXE=%%t"
+goto :eof
+
+REM - download the portable Tor Expert Bundle once
+REM Facts travel the Tor Browser updater downloads.json first: it carries
+REM the exact current bundle filename, so no version is ever hard-coded.
+REM A scrape of the dist folder index is the fallback. Size-gated like
+REM every other download, unpacked with the Windows tar.exe, direct egress.
+:tor_install_if_missing
+set "TOR_EXE="
+if exist "%TOR_DIR%\Tor\tor.exe" set "TOR_EXE=%TOR_DIR%\Tor\tor.exe"
+if not defined TOR_EXE if exist "%TOR_DIR%\tor.exe" set "TOR_EXE=%TOR_DIR%\tor.exe"
+if defined TOR_EXE echo   [tor] tor is already installed: %TOR_EXE%
+if defined TOR_EXE goto :eof
+call :trace tor_install
+if not exist "%TOR_DIR%" mkdir "%TOR_DIR%" >nul 2>&1
+set "TORPLAT=windows_x86_64"
+set "TORFILE=windows-x86_64"
+if /i "%PROCESSOR_ARCHITECTURE%"=="ARM64" set "TORPLAT=windows_arm64"
+if /i "%PROCESSOR_ARCHITECTURE%"=="ARM64" set "TORFILE=windows-arm64"
+if "%REAL86%"=="1" set "TORPLAT=windows_i686"
+if "%REAL86%"=="1" set "TORFILE=windows-i686"
+set "TGZ=%TEMP%\tor-expert-bundle.tar.gz"
+if exist "%TGZ%" del /f /q "%TGZ%" >nul 2>&1
+set "KEEP_HP=%HTTP_PROXY%"
+set "KEEP_SP=%HTTPS_PROXY%"
+set "HTTP_PROXY="
+set "HTTPS_PROXY="
+set "OC_TORDL=%TEMP%\oc_tor_url.txt"
+set "OC_TPLAT=%TORPLAT%"
+set "OC_TFILE=%TORFILE%"
+set "OC_TOUT=%OC_TORDL%"
+if exist "%OC_TORDL%" del /f /q "%OC_TORDL%" >nul 2>&1
+"%PSX%" -NoProfile -Command "try{[Net.ServicePointManager]::SecurityProtocol=[Net.SecurityProtocolType]::Tls12; $j=Invoke-RestMethod -Uri 'https://aus1.torproject.org/torbrowser/update_3/release/downloads.json' -TimeoutSec 30; $p=$j.projects.tor.platforms.($env:OC_TPLAT); $u=$null; if($p -and $p.download_url){ $u=([string]$p.download_url[0]).TrimEnd('/')+'/'+[string]$p.download_filename }; if(-not $u -or $u -notmatch '^https://'){ exit 1 }; [IO.File]::WriteAllText($env:OC_TOUT, $u); exit 0 }catch{ exit 1 }" >nul 2>&1
+set "TGZURL="
+if exist "%OC_TORDL%" for /f "usebackq delims=" %%u in ("%OC_TORDL%") do set "TGZURL=%%u"
+if exist "%OC_TORDL%" del /f /q "%OC_TORDL%" >nul 2>&1
+if defined TGZURL goto :tia_fetch
+echo   [tor] updater JSON unavailable - falling back to the dist index...
+"%PSX%" -NoProfile -Command "try{[Net.ServicePointManager]::SecurityProtocol=[Net.SecurityProtocolType]::Tls12; $h=(Invoke-WebRequest -UseBasicParsing -Uri 'https://dist.torproject.org/torbrowser/' -TimeoutSec 30).Content; $vs=@(); foreach($m in [regex]::Matches($h, '(\d+\.\d+\.\d+)/')){ if($vs -notcontains $m.Groups[1].Value){ $vs+=,$m.Groups[1].Value } }; $last=$null; foreach($v in $vs){ try{ if((-not $last) -or ([version]$v -gt [version]$last)){ $last=$v } }catch{} }; if(-not $last){ exit 1 }; $u='https://dist.torproject.org/torbrowser/'+$last+'/tor-expert-bundle-'+$env:OC_TFILE+'-'+$last+'.tar.gz'; [IO.File]::WriteAllText($env:OC_TOUT, $u); exit 0 }catch{ exit 1 }" >nul 2>&1
+set "TGZURL="
+if exist "%OC_TORDL%" for /f "usebackq delims=" %%u in ("%OC_TORDL%") do set "TGZURL=%%u"
+if exist "%OC_TORDL%" del /f /q "%OC_TORDL%" >nul 2>&1
+if not defined TGZURL goto :tia_restore
+:tia_fetch
+echo     %TGZURL%
+set "OC_TURL=%TGZURL%"
+set "OC_TGZ=%TGZ%"
+if "%HAVE_CURL%"=="1" curl.exe -L -f -s --max-time 600 --noproxy "*" -o "%TGZ%" "%TGZURL%" >nul 2>&1
+if exist "%TGZ%" for %%Z in ("%TGZ%") do if %%~zZ GEQ 4000000 goto :tia_up_ok
+"%PSX%" -NoProfile -Command "try{[Net.ServicePointManager]::SecurityProtocol=[Net.SecurityProtocolType]::Tls12; Invoke-WebRequest -UseBasicParsing -Uri $env:OC_TURL -OutFile $env:OC_TGZ -TimeoutSec 600}catch{}" >nul 2>&1
+if exist "%TGZ%" for %%Z in ("%TGZ%") do if %%~zZ GEQ 4000000 goto :tia_up_ok
+:tia_restore
+set "HTTP_PROXY=%KEEP_HP%"
+set "HTTPS_PROXY=%KEEP_SP%"
+echo   [!] the Tor bundle did not download.
+goto :eof
+:tia_up_ok
+set "HTTP_PROXY=%KEEP_HP%"
+set "HTTPS_PROXY=%KEEP_SP%"
+echo   [tor] unpacking...
+set "OC_TGZ=%TGZ%"
+set "OC_TDIR=%TOR_DIR%"
+tar.exe -xzf "%TGZ%" -C "%TOR_DIR%" >nul 2>&1
+if exist "%TGZ%" del /f /q "%TGZ%" >nul 2>&1
+call :tor_find_exe
+if defined TOR_EXE (
+  echo   [ok] Tor installed (portable) in "%TOR_DIR%".
+) else (
+  echo   [!] the bundle unpacked but tor.exe was not found in "%TOR_DIR%".
+)
+goto :eof
+
+REM - start what is missing; never touch a Tor or bridge that already runs
+REM A SOCKS port already answering belongs to a running Tor (for example
+REM Tor Browser): it is used as it is. At exit :tor_stop (v2.20) stops
+REM only tor processes whose image path lives inside TOR_DIR plus bridge
+REM processes carrying the OC_TORBRIDGE_PS command-line marker, so what
+REM gets stopped is always launcher-managed - also left over from a
+REM past session - and a foreign Tor or bridge never is. An HTTP port
+REM already answering is a working bridge (anyone's) and is used as it is.
+:tor_start_if_needed
+set "OURTOR="
+set "OURBRIDGE="
+call :port_up %TOR_SOCKS_PORT%
+if errorlevel 1 goto :tsi_tor
+echo   [tor] a Tor is already running on :%TOR_SOCKS_PORT% - using it as it is.
+goto :tsi_bridge
+:tsi_tor
+call :tor_find_exe
+if not defined TOR_EXE exit /b 1
+if not exist "%TOR_DIR%\data" mkdir "%TOR_DIR%\data" >nul 2>&1
+REM torrc written to a file instead of quoting trouble on the command
+REM line. Quoted values must carry WINDOWS PATHS AS FORWARD SLASHES:
+REM tor treats a backslash inside double quotes as the start of an
+REM escape sequence, so a backslashed path dies parsing with
+REM "Invalid escape sequence in quoted string". tor accepts
+REM forward-slash Windows paths, so slashtify the directory once here.
+set "OC_TDS=%TOR_DIR:\=/%"
+>"%TOR_DIR%\torrc" echo SocksPort "127.0.0.1:%TOR_SOCKS_PORT%"
+>>"%TOR_DIR%\torrc" echo DataDirectory "%OC_TDS%/data"
+>>"%TOR_DIR%\torrc" echo Log "notice file %OC_TDS%/tor.log"
+if exist "%TOR_DIR%\tor.log" del /f /q "%TOR_DIR%\tor.log" >nul 2>&1
+if exist "%TOR_DIR%\tor.pid" del /f /q "%TOR_DIR%\tor.pid" >nul 2>&1
+set "OC_TOREXE=%TOR_EXE%"
+set "OC_TORRC=%TOR_DIR%\torrc"
+set "OC_TORPID=%TOR_DIR%\tor.pid"
+set "OC_TORLOG=%TOR_DIR%\tor.log"
+set "OC_TORERR=%TOR_DIR%\tor_start.err"
+if exist "%OC_TORERR%" del /f /q "%OC_TORERR%" >nul 2>&1
+echo   [tor] starting tor (hidden window, log: "%OC_TORLOG%")...
+REM tor's config switch is -f (a "--torrc" flag does not exist: tor
+REM exits with "Unknown option 'torrc'"). stderr is captured so a tor
+REM that refuses to start leaves its own reason in tor_start.err, and
+REM the spawn is confirmed two seconds later: a process that died
+REM immediately after Start-Process is a failed start, not an up one.
+"%PSX%" -NoProfile -Command "try{ $si=New-Object System.Diagnostics.ProcessStartInfo; $si.FileName=$env:OC_TOREXE; $si.Arguments=('-f '+[char]34+$env:OC_TORRC+[char]34+' --quiet'); $si.UseShellExecute=$false; $si.CreateNoWindow=$true; $si.RedirectStandardError=$true; $p=[System.Diagnostics.Process]::Start($si); if(-not $p){ exit 1 }; [IO.File]::WriteAllText($env:OC_TORPID,[string]$p.Id); Start-Sleep -Seconds 2; if($p.HasExited){ try{ [IO.File]::WriteAllText($env:OC_TORERR, 'tor exited with code '+$p.ExitCode+': '+($p.StandardError.ReadToEnd())) }catch{}; exit 1 }; exit 0 }catch{ exit 1 }" >nul 2>&1
+if errorlevel 1 (
+  echo   [!] tor could not be started - see "%OC_TORERR%" and "%OC_TORLOG%".
+  if exist "%OC_TORERR%" "%PSX%" -NoProfile -Command "Get-Content -LiteralPath $env:OC_TORERR -ErrorAction SilentlyContinue | Select-Object -First 4 | ForEach-Object { '     ' + [string]$_ }"
+  exit /b 1
+)
+set "OURTOR=1"
+:tsi_bridge
+call :port_up %TOR_HTTP_PORT%
+if not errorlevel 1 goto :tsi_done
+set "OC_BRPORT=%TOR_HTTP_PORT%"
+set "OC_BRSOCKS=%TOR_SOCKS_PORT%"
+set "OC_BRLOG=%TOR_DIR%\bridge.log"
+set "OC_BRPIDF=%TOR_DIR%\bridge.pid"
+if exist "%OC_BRLOG%" del /f /q "%OC_BRLOG%" >nul 2>&1
+if exist "%OC_BRPIDF%" del /f /q "%OC_BRPIDF%" >nul 2>&1
+echo   [tor] starting the built-in HTTP-^>SOCKS bridge on :%TOR_HTTP_PORT% (no Privoxy needed)...
+start "" /b "%PSX%" -NoProfile -Command "$l=Get-Content -LiteralPath $env:OCI_SELF; $i=[Array]::IndexOf($l,'#>>>OC_TORBRIDGE_PS'); $e=[Array]::IndexOf($l,'#>>>OC_ENDTORBRIDGE'); if(($i -ge 0) -and ($e -gt $i)){ $BRTEXT=(($l[($i+1)..($e-1)]) -join [Environment]::NewLine); Invoke-Expression $BRTEXT }"
+timeout /t 2 /nobreak >nul 2>&1
+set "OURBRIDGE=1"
+:tsi_done
+exit /b 0
+
+REM - wait until Tor routes THROUGH THE BRIDGE (v2.20): the run gate and
+REM opencode itself use the HTTP proxy on TOR_HTTP_PORT, so the wait
+REM checks the whole chain, not just a live SOCKS port - a Tor up with a
+REM dead bridge must not be answered as ready. With curl: the real TRACE
+REM probe through the bridge. Without curl: "Bootstrapped 100" in the
+REM tor log plus both ports listening. Bounded.
+:tor_wait_up
+echo   [tor] bootstrapping, up to %TOR_BOOTSTRAP_WAIT%s (the first run takes longer)...
+set /a TW_TRIES=0
+:tw_loop
+set /a TW_TRIES+=2
+if %TW_TRIES% GTR %TOR_BOOTSTRAP_WAIT% goto :tw_timeout
+timeout /t 2 /nobreak >nul 2>&1
+call :tw_check
+if not errorlevel 1 goto :tw_up
+<nul set /p=.
+goto :tw_loop
+:tw_up
+echo.
+echo   [tor] Tor is up and routing through the bridge.
+exit /b 0
+:tw_timeout
+echo.
+echo   [tor] still not up after %TOR_BOOTSTRAP_WAIT%s.
+exit /b 1
+REM One wait check. Runtime-safe errorlevel handling throughout (the
+REM old NEQ-style line read %errorlevel% as stale parse-time text).
+:tw_check
+if "%HAVE_CURL%"=="1" (
+  curl.exe -sS -o nul -f --max-time 8 --noproxy "" --proxy "http://127.0.0.1:%TOR_HTTP_PORT%" "%TRACE_URL%" >nul 2>&1
+  if errorlevel 1 exit /b 1
+  exit /b 0
+)
+call :port_up %TOR_SOCKS_PORT%
+if errorlevel 1 exit /b 1
+call :port_up %TOR_HTTP_PORT%
+if errorlevel 1 exit /b 1
+if not exist "%TOR_DIR%\tor.log" exit /b 1
+findstr /c:"Bootstrapped 100" "%TOR_DIR%\tor.log" >nul 2>&1
+if errorlevel 1 exit /b 1
+exit /b 0
+
+REM - the last lines of tor.log, printed next to the failure message
+:tor_log_tail
+if not exist "%TOR_DIR%\tor.log" goto :eof
+set "OC_TF=%TOR_DIR%\tor.log"
+"%PSX%" -NoProfile -Command "if(Test-Path -LiteralPath $env:OC_TF){ Get-Content -LiteralPath $env:OC_TF -Tail 6 | ForEach-Object { '     ' + $_ } }"
+goto :eof
+
+REM - is a TCP port on 127.0.0.1 accepting connections?
+REM usage: call :port_up 9050  -> errorlevel 0 when open, 1 when closed.
+:port_up
+set "OC_PU=%~1"
+"%PSX%" -NoProfile -Command "try{$c=New-Object Net.Sockets.TcpClient;$a=$c.BeginConnect('127.0.0.1',[int]$env:OC_PU,$null,$null);if(-not $a.AsyncWaitHandle.WaitOne(1200)){exit 1};$c.EndConnect($a);$c.Close();exit 0}catch{exit 1}" >nul 2>&1
+exit /b %errorlevel%
+
+REM - stop only launcher-managed processes, never a recycled PID or a
+REM foreign process behind a stale record (v2.20 rewrite):
+REM   tor    - only if its ProcessName is tor AND its image path lives
+REM            inside TOR_DIR, the private bundle dir only this launcher
+REM            writes to. A user's Tor Browser or any foreign tor is
+REM            never matched, whatever the pid file says.
+REM   bridge - only if ProcessName is powershell/pwsh AND the process
+REM            command line carries the OC_TORBRIDGE_PS marker that every
+REM            launcher-spawned bridge process carries.
+REM Final stop verification is by identity, not by pid alone; pid files
+REM that match nothing are stale garbage and are deleted.
+:tor_stop
+set "OC_TORPID=%TOR_DIR%\tor.pid"
+set "OC_BRPIDF=%TOR_DIR%\bridge.pid"
+if not exist "%OC_TORPID%" if not exist "%OC_BRPIDF%" goto :eof
+set "OC_TORDIR=%TOR_DIR%"
+if exist "%OC_TORPID%" "%PSX%" -NoProfile -Command "$t=Get-Content -LiteralPath $env:OC_TORPID -ErrorAction SilentlyContinue | Select-Object -First 1; if($t){ try{ $p=Get-Process -Id ([int]$t) -ErrorAction Stop }catch{ $p=$null }; if($p -and $p.ProcessName -eq 'tor'){ $ok=$false; try{ $pd=$env:OC_TORDIR; if($p.Path){ $ok=($p.Path -ieq $pd) -or ($p.Path -like ($pd+'\*')) } }catch{}; if($ok){ try{ Stop-Process -Id $p.Id -Force }catch{} } } }" >nul 2>&1
+if exist "%OC_BRPIDF%" "%PSX%" -NoProfile -Command "$t=Get-Content -LiteralPath $env:OC_BRPIDF -ErrorAction SilentlyContinue | Select-Object -First 1; if($t){ try{ $p=Get-Process -Id ([int]$t) -ErrorAction Stop }catch{ $p=$null }; if($p -and ($p.ProcessName -eq 'powershell' -or $p.ProcessName -eq 'pwsh')){ $ok=$false; try{ $cl=(Get-CimInstance Win32_Process -Filter ('ProcessId=' + [string]$p.Id)).CommandLine; if($cl -and $cl.Contains('OC_TORBRIDGE_PS')){ $ok=$true } }catch{}; if($ok){ try{ Stop-Process -Id $p.Id -Force }catch{} } } }" >nul 2>&1
+del /f /q "%OC_TORPID%" "%OC_BRPIDF%" >nul 2>&1
+set "OURTOR="
+set "OURBRIDGE="
+goto :eof
+
 REM - exit IP + warp flag
 REM When WARP is on, an IP is reported only if the trace came back
 REM through the proxy AND says warp=on. a dead tunnel reports nothing,
@@ -2134,10 +2548,17 @@ if "%HAVE_CURL%"=="1" (
 )
 set "HTTP_PROXY=%KEEP_HP%"
 set "HTTPS_PROXY=%KEEP_SP%"
+REM v2.21: strip a UTF-8 BOM if the list was saved by a text editor, so
+REM the first line still parses as a proxy (or as a comment).
+set "OC_PLIST=%PLIST%"
+"%PSX%" -NoProfile -Command "$p=$env:OC_PLIST; try{ $b=[IO.File]::ReadAllBytes($p); if($b.Length -ge 3 -and $b[0] -eq 0xEF -and $b[1] -eq 0xBB -and $b[2] -eq 0xBF){ [IO.File]::WriteAllBytes($p, $b[3..($b.Length-1)]) } }catch{}" >nul 2>&1
 if not exist "%PLIST%" exit /b 1
 set "PLSZ=0"
 for %%F in ("%PLIST%") do set "PLSZ=%%~zF"
-if %PLSZ% LSS 20 exit /b 1
+REM v2.21: the minimum is now configurable (PROXY_LIST_MIN_BYTES,
+REM default 20, 0 = no gate), so a short custom list is not rejected.
+REM An empty file still dies later: the loop finds no candidates.
+if %PLSZ% LSS %PROXY_LIST_MIN_BYTES% exit /b 1
 set /a PTRY=0
 for /f "usebackq delims=" %%p in ("%PLIST%") do (
   set "CAND=%%p"
@@ -2153,16 +2574,25 @@ exit /b 0
 
 REM - count one list attempt and enforce PROXY_TRY_MAX
 REM Called from the for body so the counter is not frozen by block expansion.
+REM Comment lines (# or ;) are list headers: they do not count toward the
+REM cap and never spend a probe (v2.21).
 :pfp_count
+set "C1=%CAND:~0,1%"
+if "%C1%"=="#" exit /b 0
+if "%C1%"==";" exit /b 0
 set /a PTRY+=1
 if %PTRY% GTR %PROXY_TRY_MAX% exit /b 1
 exit /b 0
 
-REM - test one candidate from the free list (HTTP only)
+REM - test one candidate from the free list (HTTP and HTTPS proxies)
 :try_one_proxy
-REM CAND is either "http://ip:port" or "ip:port"
+REM CAND is "ip:port", "http://ip:port" or "https://ip:port"; a comment
+REM line is skipped before anything is probed (v2.21).
 set "C=%CAND%"
-echo %C% | findstr /i /b "http://" >nul 2>&1
+set "C1=%CAND:~0,1%"
+if "%C1%"=="#" exit /b 1
+if "%C1%"==";" exit /b 1
+echo %C% | findstr /i /b "http:// https://" >nul 2>&1
 if errorlevel 1 set "C=http://%C%"
 echo %C% | findstr /i "socks" >nul 2>&1
 if not errorlevel 1 exit /b 1
@@ -2208,11 +2638,22 @@ if not exist "%STATE_DIR%" goto :eof
 >>"%STATE_DIR%\startup.log" echo %DATE% %TIME% %*
 goto :eof
 
+REM - keep an appended log bounded (v2.20): only rewrites the file once
+REM it is bigger than MAXB bytes, keeping the last KEEP lines.
+REM usage: call :trim_log FILE MAXB KEEP
+:trim_log
+if not exist "%~1" goto :eof
+set "OC_TLF=%~1"
+set "OC_TMAX=%~2"
+set "OC_TKEEP=%~3"
+"%PSX%" -NoProfile -Command "$i=Get-Item -LiteralPath $env:OC_TLF -ErrorAction SilentlyContinue; if($i -and $i.Length -gt [long]$env:OC_TMAX){ try{ $l=@(Get-Content -LiteralPath $env:OC_TLF | Select-Object -Last ([int]$env:OC_TKEEP)); if($l.Count){ Set-Content -LiteralPath $env:OC_TLF -Value $l -Encoding ascii } }catch{} }" >nul 2>&1
+goto :eof
+
 REM - self-update: newest launcher from the GitHub repo [upd] ---------
 REM Once per start, before anything interactive. Steps:
 REM   1) download the raw .bat (curl, else PowerShell), 30 s cap,
 REM      direct (never through the WARP proxy), HTTP errors fail;
-REM   2) size gate (real script is ~70 KB, an error page is not) plus
+REM   2) size gate (this script is ~135 KB; an error page is not) plus
 REM      a header-marker gate, so a truncated or wrong file never
 REM      replaces the launcher;
 REM   3) read "launcher  (vX.Y)" from the running file and the
@@ -2229,6 +2670,9 @@ call :trace upd_start
 set "SU_TMP=%STATE_DIR%\upd_remote.bat"
 if exist "%SU_TMP%" del /f /q "%SU_TMP%" >nul 2>&1
 call :have_exe curl.exe
+REM v2.20: mirror the result into the canonical HAVE_CURL flag and use
+REM only that name below - the HAVE twin used to diverge from it.
+set "HAVE_CURL=%HAVE%"
 REM v2.12: resolve the newest commit SHA on main through the GitHub API
 REM first, then build a SHA-pinned raw URL. A raw/<SHA>/ URL can never
 REM serve a stale CDN copy, unlike raw/main which once did (the bug that
@@ -2249,12 +2693,15 @@ goto :su_url_done
 :su_url_plain
 set "SU_URL=%UPDATE_URL%"
 :su_url_done
-if "%HAVE%"=="1" goto :su_curl
+if "%HAVE_CURL%"=="1" goto :su_curl
 "%PSX%" -NoProfile -Command "try{[Net.ServicePointManager]::SecurityProtocol=[Net.SecurityProtocolType]::Tls12; Invoke-WebRequest -UseBasicParsing -Uri $env:SU_URL -OutFile $env:SU_TMP -TimeoutSec 30}catch{exit 1}" >nul 2>&1
 if errorlevel 1 goto :su_eof
 goto :su_size
 :su_curl
-curl.exe -L -f -s --max-time 30 --noproxy "*" -o "%SU_TMP%" "%UPDATE_URL%" >nul 2>&1
+REM v2.20: download from SU_URL - the SHA-pinned URL when the API resolved
+REM it - never from UPDATE_URL (raw main); the v2.12 never-stale pin never
+REM reached this curl line before.
+curl.exe -L -f -s --max-time 30 --noproxy "*" -o "%SU_TMP%" "%SU_URL%" >nul 2>&1
 if not errorlevel 1 goto :su_size
 REM Direct egress failed (firewalls and corporate proxies block raw
 REM downloads): retry through the Windows proxy settings, which iwr
@@ -2362,6 +2809,7 @@ goto :eof
 REM Common exit: restore the folder with popd, remove the lock, and end the local scope.
 :quit
 if defined POPPED popd
+call :tor_stop
 if exist "%STATE_DIR%\lock\" rmdir /s /q "%STATE_DIR%\lock" >nul 2>&1
 endlocal
 
@@ -2375,6 +2823,200 @@ REM  print the chosen folder on stdout and print nothing on
 REM  cancel, so no temp file and no helper script is ever made.
 REM ============================================================
 exit /b
+
+#>>>OC_TORBRIDGE_PS
+# Built-in HTTP->SOCKS bridge (replaces Privoxy). Started hidden by
+# :tor_start_if_needed; reads OC_BRPORT / OC_BRSOCKS / OC_BRLOG /
+# OC_BRPIDF from the environment; logs to bridge.log; killed through
+# the PID in bridge.pid by :tor_stop. Loopback only.
+# The same text serves two contexts: the starter runs it once (no
+# $CLIENT variable) and it becomes the accept loop; every accepted
+# connection gets its own runspace seeded with $CLIENT, where the
+# same text sees $CLIENT and runs Handle-Client on this one socket.
+# Threadpool callbacks cannot run PowerShell functions (worker
+# threads have no runspace): handlers died silently on accept and
+# every CONNECT waited for the client to reset. Tunnels need both
+# directions live, so the client-to-target pump gets its own small
+# runspace and the target-to-client pump runs in the handler here.
+# v2.20 fixes: every SOCKS reply read is exact-length (Read-Exact helper)
+# so a split or refused reply never leaves stale bytes for the TLS
+# handshake, and the request-head read carries an 8s timeout so a silent
+# local client cannot park its handler forever. The timeout is captured
+# and restored before the pumps start: idle long-lived tunnels (SSE,
+# websockets) must be allowed to stay open indefinitely.
+$ErrorActionPreference = 'Continue'
+try { [IO.File]::WriteAllText($env:OC_BRPIDF, [string]$PID) } catch { }
+function Write-BridgeLog([string]$m) {
+    try { Add-Content -LiteralPath $env:OC_BRLOG -Value ((Get-Date -Format o) + ' ' + $m) } catch { }
+}
+# reads EXACTLY $total bytes or returns $null at EOF or error. SOCKS
+# replies may arrive split across TCP reads; v2.20 consumes every reply
+# with exact reads so no stale byte survives next in the stream.
+function Read-Exact($n, $total) {
+    $out = New-Object byte[] $total
+    $got = 0
+    while ($got -lt $total) {
+        $r = $n.Read($out, $got, $total - $got)
+        if ($r -le 0) { return $null }
+        $got += $r
+    }
+    return $out
+}
+function Connect-Socks([string]$hostName, [int]$port) {
+    try {
+        $s = New-Object Net.Sockets.TcpClient
+        $s.Connect('127.0.0.1', [int]$env:OC_BRSOCKS)
+        $n = $s.GetStream()
+        $n.Write([byte[]](5, 1, 0), 0, 3)
+        $r = Read-Exact $n 2
+        if (-not $r) { $s.Close(); return $null }
+        if ($r[1] -ne 0) { $s.Close(); return $null }
+        $h = [Text.Encoding]::ASCII.GetBytes($hostName)
+        if ($h.Length -gt 255) { $s.Close(); return $null }
+        $pb = New-Object byte[] 2
+        $pb[0] = [byte](($port -shr 8) -band 255)
+        $pb[1] = [byte]($port -band 255)
+        $req = New-Object byte[] (5 + $h.Length + 2)
+        $req[0] = 5; $req[1] = 1; $req[2] = 0; $req[3] = 3; $req[4] = $h.Length
+        [Array]::Copy($h, 0, $req, 5, $h.Length)
+        [Array]::Copy($pb, 0, $req, 5 + $h.Length, 2)
+        $n.Write($req, 0, $req.Length)
+        $resp = Read-Exact $n 4
+        if (-not $resp) { $s.Close(); return $null }
+        if ($resp[1] -ne 0) { $s.Close(); return $null }
+        # consume the exact address bytes of the reply: for ATYP=1 (IPv4)
+        # the address is fixed 4 bytes, for ATYP=4 it is fixed 16 bytes,
+        # and for ATYP=3 (FQDN) the FIRST byte after the header is the
+        # length. Reading them in exact chunks keeps the stream clean:
+        # partial or stale bytes used to be read by the TLS handshake as
+        # garbage (the SEC_E_INVALID_TOKEN failure).
+        if ($resp[3] -eq 1) { $skipLen = 4 }
+        elseif ($resp[3] -eq 4) { $skipLen = 16 }
+        elseif ($resp[3] -eq 3) { $lb = Read-Exact $n 1; if (-not $lb) { $s.Close(); return $null }; $skipLen = [int]$lb[0] }
+        else { $s.Close(); return $null }
+        if ($skipLen -gt 0) { $sk = Read-Exact $n $skipLen; if (-not $sk) { $s.Close(); return $null } }
+        $tail = Read-Exact $n 2
+        if (-not $tail) { $s.Close(); return $null }
+        return $s
+    } catch { return $null }
+}
+function Pump($from, $to) {
+    try {
+        $buf = New-Object byte[] 65536
+        while ($true) {
+            $n = $from.Read($buf, 0, $buf.Length)
+            if ($n -le 0) { break }
+            $to.Write($buf, 0, $n)
+        }
+    } catch { }
+    try { $to.Close() } catch { }
+    try { $from.Close() } catch { }
+}
+# reverse-direction pump on its own little runspace (see header note)
+function Spawn-Pump($from, $to, $code) {
+    try {
+        $rs2 = [runspacefactory]::CreateRunspace()
+        $rs2.Open()
+        $rs2.SessionStateProxy.SetVariable('FROM', $from)
+        $rs2.SessionStateProxy.SetVariable('TO', $to)
+        $pw2 = [powershell]::Create()
+        $pw2.Runspace = $rs2
+        [void]$pw2.AddScript($code)
+        [void]($pw2.BeginInvoke())
+    } catch {
+        Write-BridgeLog ('pumpspawn: ' + $_.Exception.Message)
+    }
+}
+$PUMP_CODE = 'try{ $buf = New-Object byte[] 65536; while ($true) { $x = $FROM.Read($buf, 0, 65536); if ($x -le 0) { break }; $TO.Write($buf, 0, $x) } } catch { }; try { $TO.Close() } catch { }; try { $FROM.Close() } catch { }'
+function Handle-Client($client) {
+    try {
+        $st = $client.GetStream()
+        # v2.20: bounded head read. A silent local client (connects and
+        # never speaks) used to park its handler forever; with a timeout
+        # set, Read throws IOException instead, the handler closes and
+        # the runspace ends. Restore the previous value before pumping:
+        # idle tunnels (SSE, websockets) must be allowed to sit open.
+        $headT = 0
+        try { $headT = $st.ReadTimeout } catch { }
+        $st.ReadTimeout = 8000
+        $head = New-Object 'System.Collections.Generic.List[byte]'
+        while ($head.Count -lt 16384) {
+            $b = $st.ReadByte()
+            if ($b -lt 0) { $client.Close(); return }
+            $head.Add([byte]$b)
+            if ($head.Count -ge 4 -and $head[$head.Count - 4] -eq 13 -and $head[$head.Count - 3] -eq 10 -and $head[$head.Count - 2] -eq 13 -and $head[$head.Count - 1] -eq 10) { break }
+        }
+        try { $st.ReadTimeout = $headT } catch { }
+        $headTxt = [Text.Encoding]::ASCII.GetString($head.ToArray())
+        $line = ($headTxt -split "`r`n")[0]
+        # CONNECT: TLS passthrough, the request head is already consumed
+        if ($line -match '^CONNECT\s+(.+):(\d+)\s') {
+            $hostName = $Matches[1]
+            $port = [int]$Matches[2]
+            if ($hostName -match '^\[(.+)\]$') { $hostName = $Matches[1] }
+            $dst = Connect-Socks $hostName $port
+            if (-not $dst) { Write-BridgeLog ('CONNECT refused: ' + $line); $client.Close(); return }
+            $okReply = [Text.Encoding]::ASCII.GetBytes('HTTP/1.1 200 Connection established' + "`r`n`r`n")
+            $st.Write($okReply, 0, $okReply.Length)
+            $cs = $dst.GetStream()
+            # both directions must live at once; see the header note
+            Spawn-Pump $st $cs $PUMP_CODE
+            Pump $cs $st
+            return
+        }
+        # plain HTTP with an absolute URI: rewrite it to origin form and relay
+        if ($line -match '^[A-Za-z]+\s+http://([^/:]+)(:\d+)?(/.*)?\s+HTTP/') {
+            $hostName = $Matches[1]
+            $port = 80
+            if ($Matches[2]) { $port = [int]($Matches[2].Replace(':', '')) }
+            $dst = Connect-Socks $hostName $port
+            if (-not $dst) { Write-BridgeLog ('request refused: ' + $line); $client.Close(); return }
+            $cs = $dst.GetStream()
+            $rewritten = $headTxt -replace ('http://' + $hostName + ':' + $port), ''
+            $rewritten = $rewritten -replace ('http://' + $hostName), ''
+            $bytes = [Text.Encoding]::ASCII.GetBytes($rewritten)
+            $cs.Write($bytes, 0, $bytes.Length)
+            Spawn-Pump $st $cs $PUMP_CODE
+            Pump $cs $st
+            return
+        }
+        $client.Close()
+    } catch {
+        Write-BridgeLog ('handler: ' + $_.Exception.Message)
+    }
+    try { $client.Close() } catch { }
+}
+if (Get-Variable -Name CLIENT -ErrorAction SilentlyContinue) {
+    Handle-Client $CLIENT
+    return
+}
+try {
+    Write-BridgeLog ('bridge up: 127.0.0.1:' + $env:OC_BRPORT + ' -> socks 127.0.0.1:' + $env:OC_BRSOCKS)
+    $listener = New-Object Net.Sockets.TcpListener([Net.IPAddress]::Loopback, [int]$env:OC_BRPORT)
+    $listener.Start()
+    $pool = New-Object System.Collections.ArrayList
+    while ($true) {
+        $client = $listener.AcceptTcpClient()
+        # reap finished per-connection runspaces, then spawn this one
+        $alive = New-Object System.Collections.ArrayList
+        foreach ($e in $pool) {
+            $pstate = $e.ps.InvocationStateInfo.State
+            if (($pstate -eq 'Running') -or ($pstate -eq 'NotStarted')) { [void]$alive.Add($e) } else { try { $e.rs.Dispose() } catch { } }
+        }
+        $pool = $alive
+        $rs = [runspacefactory]::CreateRunspace()
+        $rs.Open()
+        $rs.SessionStateProxy.SetVariable('CLIENT', $client)
+        $pw = [powershell]::Create()
+        $pw.Runspace = $rs
+        [void]$pw.AddScript($BRTEXT)
+        [void]($pw.BeginInvoke())
+        [void]$pool.Add(@{ ps = $pw; rs = $rs })
+    }
+} catch {
+    Write-BridgeLog ('listener: ' + $_.Exception.Message)
+}
+#>>>OC_ENDTORBRIDGE
 
 #>>>OC_PICKER_PS
 $ErrorActionPreference = 'Stop'
