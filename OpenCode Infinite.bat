@@ -2,13 +2,13 @@
 setlocal EnableExtensions
 title OpenCode
 REM ============================================================
-REM  OpenCode launcher  (v2.14)
+REM  OpenCode launcher  (v2.15)
 REM  WARP egress rotation + dependency bootstrap + auto-resume.
 REM
 REM  Usage:
 REM    double-click                          -> folder menu
 REM    drag a folder onto this file          -> opens in that folder
-REM    "OpenCode Infinite v2.14.bat" "D:\work\project"
+REM    "OpenCode Infinite v2.15.bat" "D:\work\project"
 REM                                          -> opens in that folder
 REM
 REM  This script never moves, renames or deletes your chats, your
@@ -147,6 +147,9 @@ set "NO_PROXY=localhost,127.0.0.1,0.0.0.0,::1,[::1]"
 REM Default PowerShell command; replaced below by the full path if it exists.
 set "PSX=powershell"
 if exist "%SystemRoot%\System32\WindowsPowerShell\v1.0\powershell.exe" set "PSX=%SystemRoot%\System32\WindowsPowerShell\v1.0\powershell.exe"
+REM This file's own path: the folder picker reads its embedded PowerShell
+REM block from here, so the picker never needs a helper file on disk.
+set "OCI_SELF=%~f0"
 
 REM UTF-8 console: folder paths in any system language survive the
 REM write/read round trip in lastfolder.txt
@@ -286,40 +289,52 @@ REM Option 2: the folder the launcher was started from.
 set "OPFOLDER=%CD%"
 goto :folder_ok
 
-REM Option 3: open a Windows folder-picker dialog through PowerShell.
-REM v2.12: modern Explorer-style dialog (IFileDialog, FOS_PICKFOLDERS) with
-REM favorites and a search bar, opened in the last used folder. ESC or X on
-REM the modern dialog counts as a request for the classic dialog: the small
-REM one opens right after, and cancelling it too reaches the retry question.
-REM Every hop lands in install.log so the picked dialog is always visible.
+REM Option 3: modern Explorer folder picker (IFileDialog, FOS_PICKFOLDERS),
+REM opened in the last used folder. ESC or X on it opens the classic
+REM FolderBrowserDialog right after; cancelling that one too reaches the
+REM retry question. Both pickers live at the end of this same file, after
+REM the batch body, and run through :run_picker, which reads this script
+REM with PowerShell and captures the chosen path from stdout. No helper
+REM files and no temp results: the dialog is the only thing that touches
+REM the disk, and it writes nothing.
 :pick_folder
 echo.
 echo   Choose a folder in the dialog...
-REM the result travels through a file, never through the command line:
-REM a quoted powershell path at the head of a for /f command gets its
-REM quotes stripped by cmd /c and the whole call dies.
 set "OPFOLDER="
-set "OC_OUT=%TEMP%\oc_pick_%RANDOM%.txt"
-if exist "%OC_OUT%" del /f /q "%OC_OUT%" >nul 2>&1
-set "OC_PICK=%OC_OUT%"
-REM Windows FolderBrowserDialog: one picker, the one that opens and works
-REM on every build (the modern interop dialog never returned a pick).
-call :olog "picker: dialog starting"
-"%PSX%" -NoProfile -STA -Command "try{Add-Type -AssemblyName System.Windows.Forms; $d = New-Object System.Windows.Forms.FolderBrowserDialog; $d.Description = 'Folder to open OpenCode in'; $d.ShowNewFolderButton = $true; if ($d.ShowDialog() -eq 'OK') { [IO.File]::WriteAllLines($env:OC_PICK, $d.SelectedPath) } }catch{}" >nul 2>&1
-call :olog "picker: dialog finished"
-:pick_read_sys
-REM Read the chosen path back, then remove the temporary file.
-if exist "%OC_OUT%" for /f "usebackq delims=" %%i in ("%OC_OUT%") do set "OPFOLDER=%%i"
-if exist "%OC_OUT%" del /f /q "%OC_OUT%" >nul 2>&1
-REM Nothing chosen (dialog cancelled): ask whether to try again.
-if not defined OPFOLDER (
-  echo.
-  echo   No folder selected.
-  choice /c YN /n /m "   Try again? [Y/N]: "
-  if not errorlevel 2 goto :pick_folder
-  goto :folder
-)
+REM Both dialogs open where the user last worked, when that folder exists.
+set "OC_START=%USERPROFILE%"
+if defined LASTPATH if exist "%LASTPATH%\" set "OC_START=%LASTPATH%"
+set "OC_MODE=modern"
+call :run_picker
+if defined OPFOLDER goto :pick_done
+REM Modern dialog cancelled (ESC/X) or unable to start: classic fallback.
+echo   Opening the classic folder picker...
+set "OC_MODE=classic"
+call :run_picker
+if defined OPFOLDER goto :pick_done
+echo.
+echo   No folder selected.
+choice /c YN /n /m "   Try again? [Y/N]: "
+if not errorlevel 2 goto :pick_folder
+goto :folder
+:pick_done
 goto :folder_ok
+
+REM - run the embedded picker (see the block after the end of the batch
+REM   body) and capture the chosen folder from stdout. OC_MODE selects the
+REM   dialog. The picker script is read out of this file from its marker
+REM   line down, so the C# interop never has to cross cmd quoting and no
+REM   helper file is ever written.
+:run_picker
+set "OPFOLDER="
+call :olog "picker: %OC_MODE% dialog starting"
+for /f "usebackq delims=" %%i in (`%PSX% -NoProfile -STA -Command "$l=Get-Content -LiteralPath $env:OCI_SELF; $i=[Array]::IndexOf($l,'#>>>OC_PICKER_PS'); if($i -lt 0){exit 1}; Invoke-Expression (($l[($i+1)..($l.Count-1)]) -join [Environment]::NewLine)"`) do set "OPFOLDER=%%i"
+if not defined OPFOLDER goto :run_picker_none
+call :olog "picker: %OC_MODE% returned a folder"
+goto :eof
+:run_picker_none
+call :olog "picker: %OC_MODE% returned nothing"
+goto :eof
 
 REM Read one raw console key without waiting for Enter. Result in READKEY:
 REM a letter/digit, ESC, ? (ignored key) or HEADLESS when the console is
@@ -1967,3 +1982,117 @@ REM Common exit: restore the folder with popd, remove the lock, and end the loca
 if defined POPPED popd
 if exist "%STATE_DIR%\lock\" rmdir /s /q "%STATE_DIR%\lock" >nul 2>&1
 endlocal
+
+REM ============================================================
+REM  Embedded folder picker (PowerShell). :run_picker reads this
+REM  file from the marker line down and runs the block with
+REM  PowerShell; the batch body ends at exit /b and never reads
+REM  these lines. OC_MODE=modern opens the Explorer-style
+REM  IFileDialog picker; classic opens FolderBrowserDialog. Both
+REM  print the chosen folder on stdout and print nothing on
+REM  cancel, so no temp file and no helper script is ever made.
+REM ============================================================
+exit /b
+
+#>>>OC_PICKER_PS
+$ErrorActionPreference = 'Stop'
+$start = $env:OC_START
+if ($env:OC_MODE -eq 'classic') {
+    Add-Type -AssemblyName System.Windows.Forms
+    $d = New-Object System.Windows.Forms.FolderBrowserDialog
+    $d.Description = 'Folder to open OpenCode in'
+    $d.ShowNewFolderButton = $true
+    if ($start -and (Test-Path -LiteralPath $start)) { $d.SelectedPath = $start }
+    if ($d.ShowDialog() -eq [System.Windows.Forms.DialogResult]::OK) {
+        [Console]::Out.WriteLine($d.SelectedPath)
+    }
+    exit 0
+}
+Add-Type -TypeDefinition @"
+using System;
+using System.IO;
+using System.Runtime.InteropServices;
+
+[ComImport, Guid("DC1C5A9C-E88A-4DDE-A5A1-60F82A20AEF7")]
+public class FileOpenDialog { }
+
+[ComImport, Guid("43826d1e-e718-42ee-bc55-a1e261c37bfe"), InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
+public interface IShellItem
+{
+    void BindToHandler(IntPtr pbc, ref Guid bhid, ref Guid riid, out IntPtr ppv);
+    void GetParent(out IShellItem ppsi);
+    void GetDisplayName(uint sigdnName, out IntPtr ppszName);
+    void GetAttributes(uint sfgaoMask, out uint psfgaoAttribs);
+    void Compare(IShellItem psi, uint hint, out int piOrder);
+}
+
+[ComImport, Guid("42f85136-db7e-439c-85f1-e4075d135fc8"), InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
+public interface IFileDialog
+{
+    [PreserveSig] int Show(IntPtr hwndParent);
+    void SetFileTypes(uint cFileTypes, IntPtr rgFilterSpec);
+    void SetFileTypeIndex(uint iFileType);
+    void GetFileTypeIndex(out uint piFileType);
+    void Advise(IntPtr pfde, out uint pdwCookie);
+    void Unadvise(uint dwCookie);
+    void SetOptions(uint fos);
+    void GetOptions(out uint pfos);
+    void SetDefaultFolder(IShellItem psi);
+    void SetFolder(IShellItem psi);
+    void GetFolder(out IShellItem ppsi);
+    void GetCurrentSelection(out IShellItem ppsi);
+    void SetFileName([MarshalAs(UnmanagedType.LPWStr)] string pszName);
+    void GetFileName(out IntPtr pszName);
+    void SetTitle([MarshalAs(UnmanagedType.LPWStr)] string pszTitle);
+    void SetOkButtonLabel([MarshalAs(UnmanagedType.LPWStr)] string pszText);
+    void SetFileNameLabel([MarshalAs(UnmanagedType.LPWStr)] string pszLabel);
+    void GetResult(out IShellItem ppsi);
+    void AddPlace(IShellItem psi, int fdap);
+    void SetDefaultExtension([MarshalAs(UnmanagedType.LPWStr)] string pszDefaultExtension);
+    void Close(int hr);
+    void SetClientGuid(ref Guid guid);
+    void ClearClientData();
+    void SetFilter(IntPtr pFilter);
+}
+
+public static class Shell
+{
+    [DllImport("shell32.dll", CharSet = CharSet.Unicode, PreserveSig = false)]
+    public static extern void SHCreateItemFromParsingName(
+        [MarshalAs(UnmanagedType.LPWStr)] string pszPath,
+        IntPtr pbc,
+        [MarshalAs(UnmanagedType.LPStruct)] Guid riid,
+        [MarshalAs(UnmanagedType.Interface)] out IShellItem ppv);
+
+    public static string PickFolder(string title, string start)
+    {
+        IFileDialog dlg = (IFileDialog)new FileOpenDialog();
+        uint opt;
+        dlg.GetOptions(out opt);
+        dlg.SetOptions(opt | 0x20 | 0x40);
+        dlg.SetTitle(title);
+        if (!string.IsNullOrEmpty(start) && Directory.Exists(start))
+        {
+            try
+            {
+                IShellItem folder;
+                SHCreateItemFromParsingName(start, IntPtr.Zero, typeof(IShellItem).GUID, out folder);
+                dlg.SetFolder(folder);
+            }
+            catch { }
+        }
+        int hr = dlg.Show(IntPtr.Zero);
+        if (hr != 0) return null;
+        IShellItem item;
+        dlg.GetResult(out item);
+        IntPtr ptr;
+        item.GetDisplayName(0x80058000, out ptr);
+        try { return Marshal.PtrToStringUni(ptr); }
+        finally { Marshal.FreeCoTaskMem(ptr); }
+    }
+}
+"@
+$path = [Shell]::PickFolder('Folder to open OpenCode in', $start)
+if ($path -and (Test-Path -LiteralPath $path)) {
+    [Console]::Out.WriteLine($path)
+}

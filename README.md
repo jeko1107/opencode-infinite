@@ -1,4 +1,4 @@
-# OpenCode Infinite - launcher handbook (v2.14)
+# OpenCode Infinite - launcher handbook (v2.15)
 
 A single-file Windows batch launcher for OpenCode that adds Cloudflare WARP
 egress rotation, dependency bootstrap, changed-IP auto-resume, watching of
@@ -154,17 +154,41 @@ Install fallback:
    `picker: dialog finished` - so a "it never picked" report is one log read
    away from a cause.
 
-### NEW in v2.14 - the Windows folder dialog owns the pick
+### NEW in v2.15 - the modern Explorer picker is back, classic on ESC
 
-v2.14 removes the modern Explorer-style picker for good. The bench and four
-machines proved it and then agreed: the compiled C# interop never returned a
-pick reliably (`pick` -> `nothing from the modern dialog` on every try, with
-no exception to name), while the classic Windows folder dialog open, pick,
-and handed back the path every single time. The launcher now uses that one
-dialog. It opens in `C:\Users\<you>` first-run, remembers the last folder
-you picked, and `Cancel` asks the usual `Try again? [Y/N]`: `Y` reopens the
-dialog, `N` returns to the menu. `install.log` keeps the short trail
-(`picker: dialog starting` / `picker: dialog finished`).
+The v2.14 note below is history: the modern dialog was never the problem. The
+interop definition was. `Add-Type` compiled the C# `IFileDialog`/`IShellItem`
+types as internal (warning: `the generated type is not public`), PowerShell
+could not see `[IFileDialog]`, the cast died inside a silent `try/catch`, and
+every attempt looked like "nothing picked". v2.15 fixes that for real:
+
+ - **Types are `public`, and the COM cast happens in C#.** PowerShell 5.1
+   cannot cast the `FileOpenDialog` RCW to the interface (`Cannot convert
+   value ... to type IFileDialog`), so a `public static Shell.PickFolder`
+   does the cast, `SetOptions(FOS_PICKFOLDERS)`, `Show`, and `GetResult`,
+   and returns the path as a string.
+ - **No helper files, no temp results.** The picker code lives at the end of
+   this same `.bat`, after `exit /b`; `:run_picker` reads the file back from
+   the `#>>>OC_PICKER_PS` marker and runs it with PowerShell. The chosen
+   folder returns on stdout and is captured with `for /f`. Nothing is
+   written to `%TEMP%` for the pick.
+ - **[3] opens the modern Explorer dialog.** ESC or X on it opens the classic
+   `FolderBrowserDialog` right after; cancelling that one reaches the usual
+   `Try again? [Y/N]`. Both dialogs open in the last used folder.
+ - **`install.log` names every hop**: `picker: modern dialog starting` then
+   `picker: modern returned a folder` or `returned nothing`, and the same
+   pair for `classic`.
+
+### NEW in v2.14 - the Windows folder dialog owns the pick (superseded by v2.15)
+
+v2.14 removed the modern Explorer-style picker. The compiled C# interop never
+returned a pick reliably (`pick` -> `nothing from the modern dialog` on every
+try, with no exception to name), while the classic Windows folder dialog
+opened, picked, and handed back the path every single time. The launcher used
+that one dialog, opened in the last folder you picked, and `Cancel` asked the
+usual `Try again? [Y/N]`. v2.15 restored the modern dialog after finding the
+actual cause (non-public interop types plus the PowerShell-side cast) and kept
+the classic dialog as the ESC/X fallback.
 
 ### NEW in v2.11 - ESC key, no auto-yank after quit
 
@@ -356,7 +380,8 @@ move "%USERPROFILE%\Desktop\opencode_chats_archiviate\<stamp>\opencode.db" "%USE
 | `deep reset` stops at `nothing to archive` | OpenCode refused to die; kill the process window and repeat |
 | `[upd]` says the repo copy failed to apply | the downloaded copy stays in `%STATE_DIR%\upd_remote.bat`; replace manually |
 | [upd] says the launcher matches the repo right after a release | you hit the stale raw/main CDN window (fixed in v2.12 - the updater now pins the commit SHA). Run [upd] again, or fetch a pinned commit copy with Update launcher.bat |
-| `install.log` says `picker: nothing from the modern dialog` and the old `picker: modern ...` rows | you are still running pre-v2.14: the modern pick never landed and the launcher opened its fallback. Update with `[upd]` (or `Update launcher.bat`) - v2.14 removed that dialog; the Windows folder picker owns the pick now |
+| `[3]` opens the modern dialog, ESC closes it and the classic opens right after | expected v2.15 behaviour: the modern cancel is the classic fallback. `install.log` shows `picker: modern returned nothing` followed by `picker: classic dialog starting`; cancelling the classic asks `Try again? [Y/N]` |
+| `install.log` keeps saying `picker: nothing from the modern dialog` | you are on pre-v2.15, where the interop types were internal and the modern pick never landed. Update with `[upd]` (or `Update launcher.bat`) |
 | `Invoke-WebRequest : positional parameter not found` while installing | you copied the old README one-liner that nests `PowerShell -Command`; PS 5.1 strips the inner quotes and the URL arrives split. Use the one-line install in section 2 (single shell, `Copy-Item`, no nested `-Command`) |
 | first paint shows `Another OpenCode launcher seems to be running. Continue anyway? [Y/N]` | a leftover lock in `%LOCALAPPDATA%\opencode-launcher\lock\` (usually a previous Ctrl+C). `Y` is safe - it is only an anti-double-open warning |
 | `Terminate batch job (Y/N)?` | Windows is asking because Ctrl+C was pressed inside a batch context. Answer no - on a Spanish system the keys are S/N, and pressing N is what keeps the launcher running while S kills it there |
@@ -369,8 +394,8 @@ move "%USERPROFILE%\Desktop\opencode_chats_archiviate\<stamp>\opencode.db" "%USE
 certutil -hashfile "OpenCode Infinite.bat" SHA256
 ```
 
-The v2.14 file hashes to
-`D80AE3DE99CC804ED3192F3B92242E550FACA1168989637BFC6E5EE841FB6BCD`.
+The v2.15 file hashes to
+`7B8C585F67FABB743FE9FF21F796038D696EE75A39D26E62C803C354666767B4`.
 A different hash means you are not on the shipped copy - re-download it
 with the one-line install in section 2. Stale copies usually trace back
 to mid-download truncation, or someone else's half-broken mirror.
@@ -383,7 +408,7 @@ use, and those patterns are here because a working launcher needs them:
 
 | Pattern in this launcher | Why it exists here | Why AV flags it |
 |---|---|---|
-| `%TEMP%\oc_*.txt` scratch + `%RANDOM%` names (14 sites) | temp result files; random names prevent two launcher instances trampling each other | files appear in %TEMP% with random names - the dropper signature |
+| `%TEMP%\oc_*.txt` scratch + `%RANDOM%` names (11 sites) | temp result files for the watcher, resume, probe and version checks; random names prevent two launcher instances trampling each other | files appear in %TEMP% with random names - the dropper signature |
 | download to `%TEMP%` then execute | this is exactly how the launcher installs WARP/node/OpenCode when missing | download-and-execute is the textbook dropper flow |
 | `start "" /b "%PSX%" ...` detached PowerShell children | the TUI wrapper, the watcher, every helper call | spawning hidden PowerShell from a batch |
 | `if ... ( ... )` blocks with delayed expansion, `^|` `^&` escapes, `>nul 2>&1` | batch needs this to be robust inside `if`/`for` blocks | "obfuscated" = lots of escapes in one file |
