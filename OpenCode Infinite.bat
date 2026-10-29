@@ -2,13 +2,13 @@
 setlocal EnableExtensions
 title OpenCode
 REM ============================================================
-REM  OpenCode launcher  (v2.6)
+REM  OpenCode launcher  (v2.7)
 REM  WARP egress rotation + dependency bootstrap + auto-resume.
 REM
 REM  Usage:
 REM    double-click                          -> folder menu
 REM    drag a folder onto this file          -> opens in that folder
-REM    "OpenCode Infinite v2.6.bat" "D:\work\project"
+REM    "OpenCode Infinite v2.7.bat" "D:\work\project"
 REM                                          -> opens in that folder
 REM
 REM  This script never moves, renames or deletes your chats, your
@@ -1007,7 +1007,9 @@ goto :iw_check
 REM Download with curl: fail on HTTP errors, 15 minute limit, no proxy.
 :iw_curl
 curl.exe -L -f -s --max-time 900 --noproxy "*" -o "%MSI%" "%WARP_MSI_URL%"
-REM Restore the proxy variables and check that the file is larger than 5 MB.
+if not errorlevel 1 goto :iw_check
+REM Direct egress failed: retry through the Windows proxy settings.
+"%PSX%" -NoProfile -Command "try{[Net.ServicePointManager]::SecurityProtocol=[Net.SecurityProtocolType]::Tls12; Invoke-WebRequest -UseBasicParsing -Uri $env:OC_URL -OutFile $env:OC_OUT}catch{}" >nul 2>&1
 :iw_check
 set "HTTP_PROXY=%KEEP_HP%"
 set "HTTPS_PROXY=%KEEP_SP%"
@@ -1078,7 +1080,9 @@ goto :sa_check
 REM Download with curl, as in install_warp.
 :sa_curl
 curl.exe -L -f -s --max-time 900 --noproxy "*" -o "%OCZIP%" "%OC_URL%"
-REM Restore the proxy and check that the zip is larger than 5 MB.
+if not errorlevel 1 goto :sa_check
+REM Direct egress failed: retry through the Windows proxy settings.
+"%PSX%" -NoProfile -Command "try{[Net.ServicePointManager]::SecurityProtocol=[Net.SecurityProtocolType]::Tls12; Invoke-WebRequest -UseBasicParsing -Uri $env:OC_URL -OutFile $env:OC_OUT}catch{}" >nul 2>&1
 :sa_check
 set "HTTP_PROXY=%KEEP_HP%"
 set "HTTPS_PROXY=%KEEP_SP%"
@@ -1648,8 +1652,12 @@ if errorlevel 1 goto :su_eof
 goto :su_size
 :su_curl
 curl.exe -L -f -s --max-time 30 --noproxy "*" -o "%SU_TMP%" "%UPDATE_URL%" >nul 2>&1
+if not errorlevel 1 goto :su_size
+REM Direct egress failed (firewalls and corporate proxies block raw
+REM downloads): retry through the Windows proxy settings, which iwr
+REM reads on its own.
+"%PSX%" -NoProfile -Command "try{[Net.ServicePointManager]::SecurityProtocol=[Net.SecurityProtocolType]::Tls12; Invoke-WebRequest -UseBasicParsing -Uri $env:SU_URL -OutFile $env:SU_TMP -TimeoutSec 30}catch{exit 1}" >nul 2>&1
 if errorlevel 1 goto :su_eof
-REM Size gate: the launcher is ~70 KB. Anything smaller is junk.
 :su_size
 set "SU_OK="
 if exist "%SU_TMP%" for %%s in ("%SU_TMP%") do if %%~zs GEQ 20000 set "SU_OK=1"
@@ -1666,12 +1674,12 @@ if not defined SU_LV goto :su_delete
 if not defined SU_RV goto :su_delete
 call :trace upd_ver %SU_LV% / %SU_RV%
 if /i "%SU_RV%"=="%SU_LV%" goto :su_same
-echo   [upd] update found: local v%SU_LV% - repo v%SU_RV%
-choice /c YN /n /m "   Replace this launcher with v%SU_RV%? [Y/N]: "
+echo   [upd] update found: local %SU_LV% - repo %SU_RV%
+choice /c YN /n /m "   Replace this launcher with %SU_RV%? [Y/N]: "
 if errorlevel 2 goto :su_delete
 goto :su_apply
 :su_same
-echo   [upd] launcher matches the repo, v%SU_LV%.
+echo   [upd] launcher matches the repo, %SU_LV%.
 goto :su_delete
 :su_apply
 call :trace upd_apply
@@ -1709,14 +1717,14 @@ if not exist "%SU_HELP%" goto :su_fail
 REM The restarted launcher would otherwise meet a fresh lock dir and be
 REM treated as a second instance. Same cleanup :quit does.
 if exist "%STATE_DIR%\lock\" rmdir /s /q "%STATE_DIR%\lock" >nul 2>&1
-echo   [upd] swapping in v%SU_RV% - this window closes now.
+echo   [upd] swapping in %SU_RV% - this window closes now.
 call :trace upd_launch
 start "" "%SU_HELP%" "%SU_TMP%" "%~f0"
 REM Exit now: nothing here is read after the file is replaced.
 timeout /t 2 /nobreak >nul 2>&1
 exit
 :su_fail
-echo   [upd] the swap could not be prepared - keeping v%SU_LV%.
+echo   [upd] the swap could not be prepared - keeping %SU_LV%.
 echo         The downloaded copy is in "%SU_TMP%".
 pause
 goto :eof
