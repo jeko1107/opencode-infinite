@@ -301,15 +301,15 @@ move "%USERPROFILE%\Desktop\opencode_chats_archiviate\<stamp>\opencode.db" "%USE
 
 | Symptom | Fix |
 |---|---|
-| `Start-Process : El argumento es NULL` at fresh start | you are on pre-v2.6; run `Update launcher.bat` once in that folder |
+| `Start-Process : argument is NULL` at fresh start | you are on pre-v2.6; run `Update launcher.bat` once in that folder |
 | `wcli.log` full of `exit 1` with NO reason | pre-v2.6 also; v2.6+ prints the daemon's message |
 | downloads fail everywhere (MSI/zip/self-update) | v2.7+ retries through Windows proxy; check the printed URLs in a browser |
 | `IP already burned, rotating` loops | free-tier quota; Ctrl+C stops the hunt |
 | `deep reset` stops at `nothing to archive` | OpenCode refused to die; kill the process window and repeat |
 | `[upd]` says the repo copy failed to apply | the downloaded copy stays in `%STATE_DIR%\upd_remote.bat`; replace manually |
-| `Invoke-WebRequest : No se encuentra ningun parametro de posicion que acepte el argumento 'Infinite.bat'` while installing | you copied the old README one-liner that nests `PowerShell -Command`; PS 5.1 strips the inner quotes and the URL arrives split. Use the one-line install in section 2 (single shell, `Copy-Item`, no nested `-Command`) |
+| `Invoke-WebRequest : positional parameter not found` while installing | you copied the old README one-liner that nests `PowerShell -Command`; PS 5.1 strips the inner quotes and the URL arrives split. Use the one-line install in section 2 (single shell, `Copy-Item`, no nested `-Command`) |
 | first paint shows `Another OpenCode launcher seems to be running. Continue anyway? [Y/N]` | a leftover lock in `%LOCALAPPDATA%\opencode-launcher\lock\` (usually a previous Ctrl+C). `Y` is safe - it is only an anti-double-open warning |
-| `Terminate batch job (Y/N)?` [the Spanish localized title uses S/N letters] | Windows is asking because Ctrl+C was pressed inside a batch context. Answer no - on a Spanish system the letters are S/N, and pressing N is what keeps the launcher running while S kills it there |
+| `Terminate batch job (Y/N)?` | Windows is asking because Ctrl+C was pressed inside a batch context. Answer no - on a Spanish system the keys are S/N, and pressing N is what keeps the launcher running while S kills it there |
 
 ---
 
@@ -324,7 +324,7 @@ The v2.9 file hashes to
 A copy whose hash differs was modified after it left this repo (mid-download
 truncation, or someone else's half-broken mirror).
 
-### Why antivirus may flag it (`BAT.Obfuscated.10` and friends)
+### Why antivirus may flag it
 
 One engine classically names this file `BAT.Obfuscated.10`. It is a heuristic,
 not a signature: the scanner sees batch patterns that malware droppers also
