@@ -2,13 +2,13 @@
 setlocal EnableExtensions
 title OpenCode
 REM ============================================================
-REM  OpenCode launcher  (v2.9)
+REM  OpenCode launcher  (v2.10)
 REM  WARP egress rotation + dependency bootstrap + auto-resume.
 REM
 REM  Usage:
 REM    double-click                          -> folder menu
 REM    drag a folder onto this file          -> opens in that folder
-REM    "OpenCode Infinite v2.9.bat" "D:\work\project"
+REM    "OpenCode Infinite v2.10.bat" "D:\work\project"
 REM                                          -> opens in that folder
 REM
 REM  This script never moves, renames or deletes your chats, your
@@ -1058,17 +1058,31 @@ set "OC_MSI=%MSI%"
 del /f /q "%MSI%" >nul 2>&1
 goto :eof
 
-REM - install opencode: npm when present, else the standalone build
-REM If opencode is already in its standard folder, do nothing.
-REM Try npm first. If npm fails, fall back to the standalone zip.
+REM - install opencode: official winget channel first, npm next, else the
+REM standalone build from the GitHub release. Every hop is logged to
+REM %STATE_DIR%\install.log so a VM that stalls shows where it stalled.
 :install_opencode
 if exist "%LOCALAPPDATA%\opencode\bin\opencode.exe" goto :eof
+call :olog "install opencode start"
+call :install_opencode_winget
+call :find_opencode
+if defined OC_CMD goto :ioc_done
+call :olog "winget channel produced nothing"
 call :have_exe npm
-if "%HAVE%"=="0" goto :standalone
+if "%HAVE%"=="0" (
+    call :olog "npm not present, going standalone"
+    goto :standalone
+)
+call :olog "npm channel: opencode-ai"
 call :npm_install
 call :find_opencode
-if defined OC_CMD goto :eof
+if defined OC_CMD goto :ioc_done
+call :olog "npm produced nothing, going standalone"
 echo   [auto-install] npm did not deliver it, going standalone.
+goto :standalone
+:ioc_done
+call :olog "opencode ready: %OC_CMD%"
+goto :eof
 
 REM Standalone build. Chooses x64 or arm64; 32-bit systems go through npm.
 :standalone
@@ -1133,6 +1147,51 @@ set "OC_BIN=%OCBIN%"
 del /f /q "%OCZIP%" >nul 2>&1
 set "PATH=%PATH%;%OCBIN%"
 if exist "%OCBIN%\opencode.exe" echo   [ok] installed to %OCBIN%
+goto :eof
+
+REM - install opencode via the official winget channel (SST.opencode)
+REM winget is the publisher-backed path: silent, one UAC prompt if the
+REM package requires elevation, and a stable uninstall entry. The portable
+REM shim lands in %LOCALAPPDATA%\Microsoft\WinGet\Links, which is added to
+REM the session PATH here and to :find_opencode as a fixed candidate.
+:install_opencode_winget
+if exist "%LOCALAPPDATA%\opencode\bin\opencode.exe" goto :eof
+if "%REAL86%"=="1" goto :iow_eof
+call :have_exe winget
+if "%HAVE%"=="0" (
+    call :olog "winget not present - skipping official channel"
+    goto :iow_eof
+)
+echo   [auto-install] official channel (winget): SST.opencode...
+call :olog "winget channel: SST.opencode start"
+set "IWC=0"
+for /f "usebackq delims=" %%v in (`winget --version 2^>nul`) do set "IWC=%%v"
+if not defined IWC (
+    call :olog "winget exists but --version gave nothing - treating as broken"
+    goto :iow_eof
+)
+if "%IWC%"=="1" (
+    call :olog "winget --version blocked (timeout, code 124)"
+    goto :iow_eof
+)
+"%PSX%" -NoProfile -Command "$p=Start-Process -FilePath winget.exe -ArgumentList @('install','--id','SST.opencode','--exact','--silent','--accept-package-agreements','--accept-source-agreements') -NoNewWindow -PassThru; if(-not $p){ exit 1 }; $null=$p.Handle; if(-not $p.WaitForExit(600000)){ Start-Process taskkill.exe -ArgumentList @('/T','/F','/PID',$p.Id) -WindowStyle Hidden -Wait; exit 124 }; exit $p.ExitCode" >nul 2>&1
+set "IWR=%errorlevel%"
+call :olog "winget install SST.opencode rc=%IWR%"
+if "%IWR%"=="124" (
+    echo   [!] winget install timed out - continuing to the next channel.
+    goto :iow_eof
+)
+set "PATH=%PATH%;%LOCALAPPDATA%\Microsoft\WinGet\Links"
+call :find_opencode
+if defined OC_CMD goto :iow_eof
+call :olog "winget reported success but opencode was not found - trying next channel"
+:iow_eof
+goto :eof
+
+REM - the one-line install trail: every hop a channel attempt makes is
+REM written here, so a VM that refuses to install gives the reason.
+:olog
+>>"%STATE_DIR%\install.log" echo [%DATE% %TIME%] %~1
 goto :eof
 
 REM Install opencode with npm globally, then add the npm folder to PATH for this session.
@@ -1220,6 +1279,7 @@ call :add_cand "%USERPROFILE%\.local\bin\opencode.exe"
 call :add_cand "%LOCALAPPDATA%\Programs\opencode\opencode.exe"
 call :add_cand "%LOCALAPPDATA%\opencode\bin\opencode.exe"
 call :add_cand "%USERPROFILE%\.opencode\bin\opencode.exe"
+call :add_cand "%LOCALAPPDATA%\Microsoft\WinGet\Links\opencode.exe"
 if not exist "%OCCAND%" goto :eof
 REM One candidate: take it without paying the cost of a version probe.
 set "OCN=0"
