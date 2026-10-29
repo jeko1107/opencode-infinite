@@ -286,6 +286,9 @@ move "%USERPROFILE%\Desktop\opencode_chats_archiviate\<stamp>\opencode.db" "%USE
 | `IP already burned, rotating` loops | free-tier quota; Ctrl+C stops the hunt |
 | `deep reset` stops at `nothing to archive` | OpenCode refused to die; kill the process window and repeat |
 | `[upd]` says the repo copy failed to apply | the downloaded copy stays in `%STATE_DIR%\upd_remote.bat`; replace manually |
+| `Invoke-WebRequest : No se encuentra ningún parámetro de posición que acepte el argumento 'Infinite.bat'` while installing | you copied the old README one-liner that nests `PowerShell -Command`; PS 5.1 strips the inner quotes and the URL arrives split. Use the one-line install in section 2 (single shell, `Copy-Item`, no nested `-Command`) |
+| first paint shows `Another OpenCode launcher seems to be running. Continue anyway? [Y/N]` | a leftover lock in `%LOCALAPPDATA%\opencode-launcher\lock\` (usually a previous Ctrl+C). `Y` is safe — it is only an anti-double-open warning |
+| `¿Desea terminar el trabajo por lotes (S/N)?` | Windows seen when Ctrl+C was pressed inside a batch context. `N` keeps the launcher running; `S` kills it there |
 
 ---
 
