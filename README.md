@@ -1,4 +1,4 @@
-# OpenCode Infinite - launcher handbook (v2.9)
+# OpenCode Infinite - launcher handbook (v2.11)
 
 A single-file Windows batch launcher for OpenCode that adds Cloudflare WARP
 egress rotation, dependency bootstrap, changed-IP auto-resume, watching of
@@ -136,6 +136,28 @@ Install fallback:
 
 > npm present -> `npm install -g opencode-ai`
 > npm absent -> standalone build from GitHub releases (x64 or arm64)
+
+### NEW in v2.11 - modern folder picker, ESC key, no auto-yank after quit
+
+Three fixes to the mouse-and-keyboard side, zero new settings:
+
+ - **Folder picker ([3]) is modern now.** The launcher compiles a small
+   C# wrapper for the Windows IFileDialog (FOS_PICKFOLDERS) - the same
+   big Explorer-style dialog modern apps use, with favorites, a search bar
+   and a size grip - and opens it in the last used folder when there is one.
+   If compiling is impossible (hardened AppLocker, stripped .NET), it falls
+   back to the old small dialog automatically, so [3] never dies.
+ - **ESC works in the folder menu.** The folder menu now reads the console
+   key directly; ESC exits the launcher, any other key remains [1]-[4], and
+   unknown keys just redraw the menu. On redirected stdin (non-interactive
+   consoles) it falls back to the classic choice line, so piped flows are
+   untouched.
+ - **ESC no longer yanks you back.** Pressing ESC inside OpenCode quits it -
+   that is OpenCode's own keymap and cannot be changed by the launcher. But
+   when OpenCode closes, the old 5-second choice /d y auto-relaunched the
+   session right away. The default is N in v2.11: a clean quit lands in
+   the menu; press Y within the 5s window if you want the IP + resume
+   (the automatic rotation paths keep their behavior).
 
 ### NEW in v2.9 - auto-rotate hardening (the "hit the limit, keep going" fix)
 
@@ -319,10 +341,11 @@ move "%USERPROFILE%\Desktop\opencode_chats_archiviate\<stamp>\opencode.db" "%USE
 certutil -hashfile "OpenCode Infinite.bat" SHA256
 ```
 
-The v2.9 file hashes to
-`8EA8FEAE95725295A39095913728520CBB9BFCD6547C3B91129ACF0FAB623FC3`.
-A copy whose hash differs was modified after it left this repo (mid-download
-truncation, or someone else's half-broken mirror).
+The v2.11 file hashes to
+`6B22C351978375174717961B11E03C04E5FCD3EB623279AE26414E111DF94E4F`.
+A different hash means you are not on the shipped copy - re-download it
+with the one-line install in section 2. Stale copies usually trace back
+to mid-download truncation, or someone else's half-broken mirror.
 
 ### Why antivirus may flag it
 
