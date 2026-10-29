@@ -319,6 +319,36 @@ move "%USERPROFILE%\Desktop\opencode_chats_archiviate\<stamp>\opencode.db" "%USE
 certutil -hashfile "OpenCode Infinite.bat" SHA256
 ```
 
+The v2.9 file hashes to
+`8EA8FEAE95725295A39095913728520CBB9BFCD6547C3B91129ACF0FAB623FC3`.
+A copy whose hash differs was modified after it left this repo (mid-download
+truncation, or someone else's half-broken mirror).
+
+### Why antivirus may flag it (`BAT.Obfuscated.10` and friends)
+
+One engine classically names this file `BAT.Obfuscated.10`. It is a heuristic,
+not a signature: the scanner sees batch patterns that malware droppers also
+use, and those patterns are here because a working launcher needs them:
+
+| Pattern in this launcher | Why it exists here | Why AV flags it |
+|---|---|---|
+| `%TEMP%\oc_*.txt` scratch + `%RANDOM%` names (14 sites) | temp result files; random names prevent two launcher instances trampling each other | files appear in %TEMP% with random names — the dropper signature |
+| download to `%TEMP%` then execute | this is exactly how the launcher installs WARP/node/OpenCode when missing | download-and-execute is the textbook dropper flow |
+| `start "" /b "%PSX%" ...` detached PowerShell children | the TUI wrapper, the watcher, every helper call | spawning hidden PowerShell from a batch |
+| `if ... ( ... )` blocks with delayed expansion, `^|` `^&` escapes, `>nul 2>&1` | batch needs this to be robust inside `if`/`for` blocks | "obfuscated" = lots of escapes in one file |
+| one 1,900-line `.bat` with ~80 `call :label` targets | every feature lives in its own subroutine | size + goto density beats the scanner's normal-file heuristics |
+
+The complete outbound footprint is four public hosts —
+`raw.githubusercontent.com`, `github.com` (OpenCode release zip),
+`downloads.cloudflareclient.com` (WARP MSI), `nodejs.org` (32-bit node MSI).
+No base64/`-EncodedCommand` blobs, no registry writes, no persistence keys,
+no startup folders, no scheduled tasks, no self-copy into system paths,
+and it deletes its own `%TEMP%` scratch on every exit.
+
+If your selected engine still dislikes the file, the practical answer is:
+hash-verify your copy, then submit the hash as a false positive to that
+engine's portal (Microsoft, Avira, DrWeb all accept submissions).
+
 Quick structural checks with findstr:
 
 ```
