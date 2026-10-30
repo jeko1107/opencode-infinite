@@ -1,4 +1,4 @@
-# OpenCode Infinite - launcher handbook (v2.27)
+# OpenCode Infinite - launcher handbook (v2.28)
 
 A single-file Windows batch launcher for OpenCode that adds multi-egress
 (Cloudflare WARP, Tor, free/custom HTTP proxy lists, or direct), dependency
@@ -144,18 +144,53 @@ newest WIN (old v1-vs-v2 database mismatch reported instead of failing):
 
 Install fallback:
 
-> npm present -> `npm install -g opencode-ai`
-> npm absent -> standalone build from GitHub releases (x64 or arm64)
+> official standalone build from opencode.ai (x64, arm64 or x64-baseline),
+> sha256-verified -> if that fails and npm is present, `npm install -g @opencode/cli`
+> (32-bit Windows: `opencode-ai` via 32-bit node, the only build it has)
+
+### NEW in v2.28 - the right opencode version, any proxy list, Tor fixes
+
+- **Installs and updates the current opencode.** GitHub `releases/latest`, the
+  npm package `opencode-ai` and winget `SST.opencode` are all frozen on the old
+  v1 line (1.19.5); the current v2 (2.2.x) is published on `opencode.ai` and as
+  the npm package `@opencode/cli`. The launcher now reads the official release
+  metadata (`opencode.ai/update/api/latest/...`, version + url + sha256) for the
+  CLI zip and the desktop installer, verifies the sha256, and picks the
+  `-baseline` zip on CPUs without AVX2. winget is no longer used.
+- **Update check.** The once-per-start check compares against the official
+  version (it used to ask npm for `opencode-ai`, so it never saw v2) and works
+  for every install: an npm install is updated through npm, anything else
+  through the standalone build. It asks first and closes every opencode process
+  before replacing files.
+- **npm 12 and the 229-byte stub.** npm 12 blocks the `@opencode/cli`
+  postinstall, which leaves `bin\opencode.exe` as a stub that prints
+  "postinstall script was not run". The launcher installs with
+  `--allow-scripts=@opencode/cli` and, if the exe is still the stub, runs
+  `postinstall.mjs` by hand. A line like that is no longer read as a version.
+- **Any proxy list.** `PROXY_LIST_URL` takes a URL (`http`, `https`, `ftp`,
+  `file:///`) or a local path, in any format: plain text, CSV, JSON, NDJSON,
+  XML or HTML, sorted or not, `ip:port`, `scheme://user:pass@host:port`, or ip
+  and port in separate fields or columns (port first works too). SOCKS entries
+  are skipped, `#` / `;` lines are comments, duplicates are dropped and the
+  file's order is kept. Tested on 1,580 proxies in every format (JSON, XML and
+  HTML take about 10 s to read, text and CSV about 1 s). The normalizer lives at
+  the end of the `.bat` (`#>>>OC_PLIST_PS`).
+- **Tor auto-install.** The Windows `tar.exe` is used by full path (a GNU tar
+  from Git in the PATH read `C:\...` as host:file and unpacked nothing), and the
+  dist index also accepts two-part versions, so Tor Browser 16.0 is found.
+- **Verified.** WARP proxy on `:40000` answers `warp=on`; Tor installs, starts,
+  bridges and renews its circuit (new exit IP); free proxy lists are fetched,
+  read and probed. WARP rotation was not exercised in this pass.
 
 ### NEW in v2.27 - Desktop installer and wider path search
 
 - **Installs the desktop app.** In Desktop mode, when no `OpenCode.exe` is
   found, the launcher asks `Download and install it now? [Y/N]`. It downloads
-  the official installer from the GitHub Releases
-  (`opencode-desktop-win-x64.exe`, or `-arm64` on ARM) with curl, no proxy,
-  checks it is over 50 MB, runs it silently (`/S`) and looks for the exe again.
-  The base URL is the `DESKTOP_URL_BASE` setting. 32-bit Windows has no desktop
-  build. No hash check, only the size gate.
+  the official installer (`opencode-desktop-win-x64.exe`, or `-arm64` on ARM)
+  with curl, no proxy, checks the size and the sha256 published by opencode.ai,
+  runs it silently (`/S`) and looks for the exe again. 32-bit Windows has no
+  desktop build. (v2.27 took it from GitHub `releases/latest`, which still points
+  at the old 1.19.5 - fixed in v2.28.)
 - **Finds the app in any folder.** First `OC_APP`, then 16 known folders under
   `%LOCALAPPDATA%\Programs`, `%LOCALAPPDATA%`, `%ProgramFiles%` and
   `%ProgramFiles(x86)%` (`ai.opencode.desktop`, `@opencode-ai\desktop`,
@@ -497,7 +532,7 @@ move "%USERPROFILE%\Desktop\opencode_chats_archiviate\<stamp>\opencode.db" "%USE
 | `TOR_HTTP_PORT` | `8118` | local HTTP proxy that fronts the SOCKS port (the built-in bridge, or any Privoxy) |
 | `TOR_AUTO_INSTALL` | `1` | download the portable Tor bundle when nothing answers on the ports |
 | `TOR_BOOTSTRAP_WAIT` | `120` s | bootstrap wait cap before failing the TOR setup |
-| `PROXY_LIST_URL` | ProxyScrape free list | your own list: a raw URL, or `file:///C:/path/lista.txt`; `ip:port` / `http(s)://ip:port` lines, `#`/`;` comments skipped |
+| `PROXY_LIST_URL` | ProxyScrape free list | your own list: a URL (`http`, `https`, `ftp`, `file:///`) or a local path, in any format (plain, CSV, JSON, XML, HTML); `#`/`;` comments skipped, SOCKS ignored |
 | `PROXY_LIST_MIN_BYTES` | `20` | download size gate for the list; `0` = off, so a short custom list is accepted |
 | `PROXY_TRY_MAX` | `12` | candidates tried per rotation before giving up |
 | `PROXY_PROBE_TIMEOUT` | `8` s | one probe against one candidate proxy |
@@ -515,7 +550,7 @@ move "%USERPROFILE%\Desktop\opencode_chats_archiviate\<stamp>\opencode.db" "%USE
  - x64 + arm64 native. **x86**: no WARP, but OpenCode runs (npm + 32-bit node).
  - Any current WARP GA (2023.3+ command set). Old warp-cli -> readable reason
   in wcli.log instead of silent failure.
- - opencode v2 (winget, npm, standalone, portable) - chosen by newest version;
+ - opencode v2 (npm @opencode/cli, official standalone build, portable) - chosen by newest version;
   v1-with-v2-DB is detected and reported, not run.
 
 ---
@@ -547,8 +582,8 @@ move "%USERPROFILE%\Desktop\opencode_chats_archiviate\<stamp>\opencode.db" "%USE
 certutil -hashfile "OpenCode Infinite.bat" SHA256
 ```
 
-The v2.27 file hashes to
-`6F5253CA1688B5A7C2461768E33A4F82B721443F11D0DFE393A8C856346606E7`.
+The v2.28 file hashes to
+`CFD6810A33BDF50A8E544365C8BBC2974ED39F8C78D2CA68597C9CAC0F21724B`.
 A different hash means you are not on the shipped copy - re-download it
 with the one-line install in section 2. Stale copies usually trace back
 to mid-download truncation, or someone else's half-broken mirror.

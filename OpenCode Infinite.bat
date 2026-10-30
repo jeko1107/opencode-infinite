@@ -2,10 +2,10 @@
 setlocal EnableExtensions
 title OpenCode
 REM ============================================================
-REM  OpenCode launcher  (v2.27)
+REM  OpenCode launcher  (v2.28)
 REM  Multi-egress (WARP / TOR / free HTTP) + dependency bootstrap
 REM  + auto-resume.
-REM  v2.22 - v2.27: every fixed bug carries an inline "REM v2.2x:"
+REM  v2.22 - v2.28: every fixed bug carries an inline "REM v2.2x:"
 REM  note.
 REM
 REM  Usage:
@@ -45,12 +45,13 @@ REM    once) and opencode (npm first, standalone build otherwise,
 REM    npm with 32-bit node on x86), with curl -f and a size gate on
 REM    every download.
 REM
-REM  - Once per start, checks npm for a newer opencode-ai and offers to
-REM    install it: installed version from "%OC_CMD% --version", latest
-REM    from "npm view opencode-ai version" over a direct connection (no
-REM    WARP proxy) with a hard 15 s cap, compared with :ver_gt. It asks
-REM    [Y/N] first, never runs during an automatic resume, and stays
-REM    silent when npm or the network is unavailable.
+REM  - Once per start, checks opencode.ai for a newer opencode and offers
+REM    to install it (v2.28): installed version from "%OC_CMD% --version",
+REM    latest from the official release metadata over a direct connection
+REM    (no WARP proxy), compared with :ver_gt. It asks [Y/N] first, updates
+REM    through the channel the running command came from (npm @opencode/cli
+REM    or the official standalone build, sha256-verified), never runs during
+REM    an automatic resume, and stays silent when the network is unavailable.
 REM
 REM  - After the workspace is chosen, asks for the egress mode:
 REM      [1] WARP   - Cloudflare WARP proxy mode (rotation supported)
@@ -212,11 +213,13 @@ set "TOR_AUTO_INSTALL=1"
 REM Seconds to wait for Tor to finish bootstrapping. The first run is
 REM slower; later runs usually need a fraction of this.
 set "TOR_BOOTSTRAP_WAIT=120"
-REM The free proxy list (protocolipport text, one proxy per line).
-REM Point it at your own list to use that one instead: a raw URL, or a
-REM local file through curl's file:/// URL form. Lines may be "ip:port",
-REM "http://ip:port" or "https://ip:port"; lines starting with # or ;
-REM are comments and are skipped (v2.21).
+REM v2.28: The proxy list. A URL (http, https, ftp, file:///) or a local path,
+REM in ANY format: plain text, CSV, JSON, NDJSON, XML or HTML; sorted or not;
+REM "ip:port", "scheme://user:pass@host:port", or ip and port in separate
+REM fields/columns. Every proxy found is used; SOCKS entries are skipped
+REM (OpenCode cannot use them) and lines starting with # or ; are comments.
+REM Local example: set "PROXY_LIST_URL=D:\lists\my proxies.json"
+REM Percent signs in a URL must be doubled (%%) inside this file.
 set "PROXY_LIST_URL=https://api.proxyscrape.com/v4/free-proxy-list/get?request=display_proxies&protocol=http&proxy_format=protocolipport&format=text"
 REM Minimum bytes the downloaded list must have before the launcher
 REM trusts it (a tiny error page is not a list). v2.21: configurable,
@@ -237,10 +240,11 @@ REM host that does not resolve rejects every proxy and kills PROXY mode.
 REM Set it to 1 only after checking the URL by hand.
 set "PROXY_API_CHECK=0"
 set "PROXY_API_CHECK_URL=https://api.opencode.ai/"
-REM v2.27: official OpenCode desktop installer (NSIS, silent /S) from the
-REM GitHub Releases. The launcher appends opencode-desktop-win-x64.exe or
-REM ...-arm64.exe; 32-bit Windows has no desktop build.
-set "DESKTOP_URL_BASE=https://github.com/anomalyco/opencode/releases/latest/download"
+REM v2.28: official release metadata (version, url, sha256 for every file).
+REM GitHub "releases/latest", the npm package opencode-ai and winget SST.opencode
+REM are all frozen on the old v1 line (1.19.5) - the current v2 is published here
+REM and as the npm package @opencode/cli. 32-bit Windows has no v2 build.
+set "OC_API_BASE=https://opencode.ai/update/api/latest"
 
 REM - internal
 REM Local port where the WARP proxy listens (WARP proxy mode).
@@ -1811,22 +1815,21 @@ REM %STATE_DIR%\install.log so a VM that stalls shows where it stalled.
 :install_opencode
 if exist "%LOCALAPPDATA%\opencode\bin\opencode.exe" goto :eof
 call :olog "install opencode start"
-call :install_opencode_winget
+REM v2.28: the winget channel (SST.opencode) is frozen on 1.19.5, the old v1
+REM line, so it is not used. The official build from opencode.ai goes first.
+call :standalone
 call :find_opencode
 if defined OC_CMD goto :ioc_done
-call :olog "winget channel produced nothing"
+if defined OC_ABORT goto :eof
+call :olog "standalone produced nothing, trying npm"
 call :have_exe npm
-if "%HAVE%"=="0" (
-    call :olog "npm not present, going standalone"
-    goto :standalone
-)
-call :olog "npm channel: opencode-ai"
+if "%HAVE%"=="0" goto :eof
+echo   [auto-install] the standalone build did not install, trying npm.
 call :npm_install
 call :find_opencode
 if defined OC_CMD goto :ioc_done
-call :olog "npm produced nothing, going standalone"
-echo   [auto-install] npm did not deliver it, going standalone.
-goto :standalone
+call :olog "npm produced nothing"
+goto :eof
 :ioc_done
 call :olog "opencode ready: %OC_CMD%"
 goto :eof
@@ -1840,7 +1843,7 @@ REM 32-bit: opencode publishes no x86 Windows binary. The JS package
 REM runs fine on 32-bit node, so the npm route is the supported path.
 echo   [i] 32-bit Windows: no standalone build - installing via npm.
 call :install_node_x86
-call :npm_install
+call :npm_install opencode-ai
 call :find_opencode
 if defined OC_CMD (
   echo   [ok] opencode ready on 32-bit via npm.
@@ -1858,10 +1861,16 @@ goto :eof
 
 REM Download the standalone zip from the latest GitHub release.
 :sa_ok
-set "OC_URL=https://github.com/sst/opencode/releases/latest/download/opencode-windows-%OCARCH%.zip"
+call :oc_cli_file
+call :oc_api cli "%OC_AFILE%"
+if defined OCA_URL goto :sa_have
+echo   [!] could not read the official release info from opencode.ai.
+goto :eof
+:sa_have
+set "OC_URL=%OCA_URL%"
 set "OCZIP=%TEMP%\opencode-windows.zip"
 set "OCBIN=%LOCALAPPDATA%\opencode\bin"
-echo   [auto-install] downloading the standalone build...
+echo   [auto-install] downloading opencode %OCA_VER% ^(official build, %OC_AFILE%^)...
 echo     %OC_URL%
 if exist "%OCZIP%" del /f /q "%OCZIP%" >nul 2>&1
 REM Clear the proxy during the download, as in install_warp.
@@ -1884,7 +1893,11 @@ set "HTTP_PROXY=%KEEP_HP%"
 set "HTTPS_PROXY=%KEEP_SP%"
 set "ZOK=0"
 if exist "%OCZIP%" for %%Z in ("%OCZIP%") do if not "%%~zZ"=="" if %%~zZ GTR 5000000 set "ZOK=1"
-if "%ZOK%"=="1" goto :sa_unzip
+if not "%ZOK%"=="1" goto :sa_bad
+call :oc_sha "%OCZIP%" "%OCA_SHA%"
+if "%SHAOK%"=="1" goto :sa_unzip
+echo     [!] checksum mismatch - the download is not the official file.
+:sa_bad
 echo     [!] download failed.
 if exist "%OCZIP%" del /f /q "%OCZIP%" >nul 2>&1
 goto :eof
@@ -1900,57 +1913,6 @@ set "PATH=%PATH%;%OCBIN%"
 if exist "%OCBIN%\opencode.exe" echo   [ok] installed to %OCBIN%
 goto :eof
 
-REM - install opencode via the official winget channel (SST.opencode)
-REM winget is the publisher-backed path: silent, one UAC prompt if the
-REM package requires elevation, and a stable uninstall entry. The portable
-REM shim lands in %LOCALAPPDATA%\Microsoft\WinGet\Links, which is added to
-REM the session PATH here and to :find_opencode as a fixed candidate.
-:install_opencode_winget
-if exist "%LOCALAPPDATA%\opencode\bin\opencode.exe" goto :eof
-if "%REAL86%"=="1" goto :iow_eof
-call :have_exe winget
-if "%HAVE%"=="0" (
-    call :olog "winget not present - skipping official channel"
-    goto :iow_eof
-)
-echo   [auto-install] official channel (winget): SST.opencode...
-call :olog "winget channel: SST.opencode start"
-REM v2.22: the old probe was dead code ("set IWC=0" left the variable
-REM defined, so "if not defined" never fired, and the timeout branch
-REM tested for a value the loop could never produce) and "winget --version"
-REM had no time limit at all. Bounded now, and read from a file.
-set "IWC="
-set "IWVF=%TEMP%\oc_winget_%RANDOM%%RANDOM%.txt"
-set "OC_WGF=%IWVF%"
-set "OC_WGTO=20"
-if exist "%IWVF%" del /f /q "%IWVF%" >nul 2>&1
-"%PSX%" -NoProfile -Command "$o=$env:OC_WGF; $to=[int]$env:OC_WGTO*1000; $p=Start-Process winget.exe -ArgumentList @('--version') -NoNewWindow -PassThru -RedirectStandardOutput $o -RedirectStandardError ($o+'.err'); if(-not $p){ exit 1 }; $null=$p.Handle; if(-not $p.WaitForExit($to)){ Start-Process taskkill.exe -ArgumentList @('/T','/F','/PID',$p.Id) -WindowStyle Hidden -Wait; exit 124 }; exit 0" >nul 2>&1
-set "IWRC=%errorlevel%"
-if exist "%IWVF%" for /f "usebackq delims=" %%v in ("%IWVF%") do if not defined IWC set "IWC=%%v"
-if exist "%IWVF%" del /f /q "%IWVF%" >nul 2>&1
-if exist "%IWVF%.err" del /f /q "%IWVF%.err" >nul 2>&1
-if "%IWRC%"=="124" (
-    call :olog "winget --version blocked (timeout, code 124)"
-    goto :iow_eof
-)
-if not defined IWC (
-    call :olog "winget exists but --version gave nothing - treating as broken"
-    goto :iow_eof
-)
-"%PSX%" -NoProfile -Command "$p=Start-Process -FilePath winget.exe -ArgumentList @('install','--id','SST.opencode','--exact','--silent','--accept-package-agreements','--accept-source-agreements') -NoNewWindow -PassThru; if(-not $p){ exit 1 }; $null=$p.Handle; if(-not $p.WaitForExit(600000)){ Start-Process taskkill.exe -ArgumentList @('/T','/F','/PID',$p.Id) -WindowStyle Hidden -Wait; exit 124 }; exit $p.ExitCode" >nul 2>&1
-set "IWR=%errorlevel%"
-call :olog "winget install SST.opencode rc=%IWR%"
-if "%IWR%"=="124" (
-    echo   [!] winget install timed out - continuing to the next channel.
-    goto :iow_eof
-)
-set "PATH=%PATH%;%LOCALAPPDATA%\Microsoft\WinGet\Links"
-call :find_opencode
-if defined OC_CMD goto :iow_eof
-call :olog "winget reported success but opencode was not found - trying next channel"
-:iow_eof
-goto :eof
-
 REM - the one-line install trail: every hop a channel attempt makes is
 REM written here, so a VM that refuses to install gives the reason.
 :olog
@@ -1959,11 +1921,29 @@ goto :eof
 
 REM Install opencode with npm globally, then add the npm folder to PATH for this session.
 :npm_install
-echo   [auto-install] installing with npm...
-call npm install -g opencode-ai
+REM v2.28: the v2 CLI is @opencode/cli (opencode-ai is the frozen v1 line, kept
+REM only for 32-bit). npm 12 blocks its postinstall unless allowed, and without
+REM it bin\opencode.exe stays a 229-byte stub that prints "postinstall script
+REM was not run". The flag is harmless on older npm (an unknown-config warning).
+set "NPMPKG=%~1"
+if not defined NPMPKG set "NPMPKG=@opencode/cli"
+echo   [auto-install] installing %NPMPKG% with npm...
+call npm install -g %NPMPKG%@latest --allow-scripts=@opencode/cli
 set "PATH=%PATH%;%ProgramFiles%\nodejs;%APPDATA%\npm"
+call :npm_fixbin
 goto :eof
 
+REM - repair a blocked postinstall: run it by hand when the exe is still the stub
+:npm_fixbin
+set "NPMROOT="
+for /f "usebackq delims=" %%r in (`npm root -g 2^>nul`) do set "NPMROOT=%%r"
+if not defined NPMROOT set "NPMROOT=%APPDATA%\npm\node_modules"
+set "NPMCLI=%NPMROOT%\@opencode\cli"
+if not exist "%NPMCLI%\postinstall.mjs" goto :eof
+for %%F in ("%NPMCLI%\bin\opencode.exe") do if %%~zF GTR 100000 goto :eof
+echo   [npm] the install script was blocked - running it by hand...
+node "%NPMCLI%\postinstall.mjs" >nul 2>&1
+goto :eof
 REM - 32-bit support: make sure npm exists, installing node if not
 REM opencode publishes no x86 Windows binary, so npm with 32-bit node
 REM is the only supported route there. Node installs through winget
@@ -2164,6 +2144,13 @@ goto :oc_ver_run
 if exist "%OC_VF%" del /f /q "%OC_VF%" >nul 2>&1
 for /f "tokens=2" %%v in ("%VLINE%") do if not defined CVER set "CVER=%%v"
 if not defined CVER for /f "tokens=1" %%v in ("%VLINE%") do if not defined CVER set "CVER=%%v"
+REM v2.28: "Error: ... postinstall script was not run" used to be taken as a
+REM version. Only a token that starts with a digit (after an optional v) is one.
+if not defined CVER goto :oc_ver_eof
+set "CV=%CVER%"
+if /i "%CV:~0,1%"=="v" set "CV=%CV:~1%"
+set "CVD=%CV:~0,1%"
+for /f "delims=0123456789" %%d in ("%CVD%") do set "CVER="
 :oc_ver_eof
 if exist "%OC_VF%" del /f /q "%OC_VF%" >nul 2>&1
 REM v2.23: no second run for an unparsable line either - only a timeout.
@@ -2227,12 +2214,12 @@ if %NN% LSS 0 set "NN=0"
 set "%NV%=%NN%"
 goto :eof
 
-REM - offer a newer opencode-ai from npm, once per start, ask first
+REM - offer a newer opencode, once per start, ask first
 REM Installed version comes from "%OC_CMD% --version" (:oc_version), the
-REM latest from "npm view opencode-ai version" over a direct connection: the
-REM proxy env is cleared for the child so WARP is never in the path, and the
-REM call is killed after 15 s. No npm, no network, a timeout or a bad answer
-REM all leave the launcher running exactly as it was. The check is skipped
+REM latest from the official release metadata (:oc_api) over a direct
+REM connection: the proxy env is cleared so WARP is never in the path, and
+REM the call is capped at 20 s. No network, a timeout or a bad answer all
+REM leave the launcher running exactly as it was. The check is skipped
 REM during an automatic resume and never installs without a Y.
 :oc_update_check
 if defined OCUPD goto :eof
@@ -2240,47 +2227,40 @@ set "OCUPD=1"
 if not defined OC_CMD goto :eof
 if defined RESUME goto :eof
 call :trace oc_update
-call :have_exe npm
-if not "%HAVE%"=="1" goto :eof
 REM Installed version, read from the binary itself.
 set "OC_CAN=%OC_CMD%"
 call :oc_version
 if not defined CVER goto :eof
 set "OCUPD_CUR=%CVER%"
-REM Latest version from the registry, direct, hard-capped at 15 s.
-set "OCUPD_LAT="
-set "OC_VF=%TEMP%\oc_npmver_%RANDOM%%RANDOM%.txt"
-set "OC_VTO=15"
-if exist "%OC_VF%" del /f /q "%OC_VF%" >nul 2>&1
-set "KEEP_HP=%HTTP_PROXY%"
-set "KEEP_SP=%HTTPS_PROXY%"
-set "HTTP_PROXY="
-set "HTTPS_PROXY="
-"%PSX%" -NoProfile -Command "$o=$env:OC_VF; $to=[int]$env:OC_VTO*1000; $line='call npm view opencode-ai version 2>nul'; $p=Start-Process cmd.exe -ArgumentList @('/c',$line) -NoNewWindow -PassThru -RedirectStandardOutput $o; if(-not $p){ exit 1 }; $null=$p.Handle; if(-not $p.WaitForExit($to)){ Start-Process taskkill.exe -ArgumentList @('/T','/F','/PID',$p.Id) -WindowStyle Hidden -Wait; exit 124 }; exit 0" >nul 2>&1
-set "OCUPD_RC=%errorlevel%"
-set "HTTP_PROXY=%KEEP_HP%"
-set "HTTPS_PROXY=%KEEP_SP%"
-if not "%OCUPD_RC%"=="0" goto :ouc_cleanup
-if not exist "%OC_VF%" goto :ouc_cleanup
-for /f "usebackq delims=" %%v in ("%OC_VF%") do set "OCUPD_LAT=%%v"
-:ouc_cleanup
-if exist "%OC_VF%" del /f /q "%OC_VF%" >nul 2>&1
-if not defined OCUPD_LAT goto :eof
-REM Compare with the same helper the binary picker uses.
+REM v2.28: latest from the official release metadata (direct, 20 s cap). The
+REM old check asked npm for opencode-ai, the frozen v1 line, so it never saw v2.
+call :oc_api cli ""
+if not defined OCA_VER goto :eof
+set "OCUPD_LAT=%OCA_VER%"
 set "VGT=0"
 call :ver_gt "%OCUPD_LAT%" "%OCUPD_CUR%"
 if not "%VGT%"=="1" goto :eof
 echo.
 echo   opencode update available: %OCUPD_CUR% -^> %OCUPD_LAT%
-choice /c YN /n /m "   Update now with npm? [Y/N]: "
+echo   It closes every running opencode process first.
+choice /c YN /n /m "   Update now? [Y/N]: "
 REM errorlevel 0 (no stdin) and 2 (N) both skip the install.
 if not errorlevel 1 goto :eof
 if errorlevel 2 goto :eof
-echo   [update] npm i -g opencode-ai@latest
-call npm i -g opencode-ai@latest
-if errorlevel 1 echo   [!] npm update failed - keeping the current version.
+call :stop_opencode
+REM Same channel as the running command: npm installs go through npm, the rest
+REM through the official standalone build.
+echo "%OC_CMD%" | findstr /i /c:"\npm" >nul 2>&1
+if errorlevel 1 goto :ouc_standalone
+echo   [update] npm i -g @opencode/cli@latest
+call :npm_install
+goto :ouc_after
+:ouc_standalone
+echo   [update] official standalone build %OCUPD_LAT%
+call :standalone
+:ouc_after
 REM v2.22: resolve the command again. OC_CMD could still point at an old
-REM standalone exe, so the version read below came from the wrong binary.
+REM exe, so the version read below came from the wrong binary. The newest wins.
 call :find_opencode
 REM Re-read what the binary reports now and refresh the capability flags.
 set "OC_CAN=%OC_CMD%"
@@ -2290,7 +2270,6 @@ call :detect_caps
 if defined OC_VER echo   [update] opencode now reports %OC_VER%
 timeout /t 2 /nobreak >nul 2>&1
 goto :eof
-
 REM - v1 binary on a v2 database
 REM A v1 CLI cannot open the v2 database and fails inside opencode with
 REM "Database is not empty and has no session table". Say it here instead.
@@ -2308,7 +2287,7 @@ call :vnum OCMAJ
 if %OCMAJ% GEQ 2 goto :eof
 echo   [!] "%OC_CMD%" reports %OC_VER% but this machine has a v2 database.
 echo       A v1 binary cannot open it: "Database is not empty and has no session table".
-echo       Update it:  npm i -g opencode-ai@latest
+echo       Update it:  npm i -g @opencode/cli@latest   ^(or accept the update offer^)
 goto :eof
 
 REM - WARP into WireGuard + proxy mode on port 40000 and connected
@@ -2491,7 +2470,7 @@ if exist "%OC_TORDL%" for /f "usebackq delims=" %%u in ("%OC_TORDL%") do set "TG
 if exist "%OC_TORDL%" del /f /q "%OC_TORDL%" >nul 2>&1
 if defined TGZURL goto :tia_fetch
 echo   [tor] updater JSON unavailable - falling back to the dist index...
-"%PSX%" -NoProfile -Command "try{[Net.ServicePointManager]::SecurityProtocol=[Net.SecurityProtocolType]::Tls12; $h=(Invoke-WebRequest -UseBasicParsing -Uri 'https://dist.torproject.org/torbrowser/' -TimeoutSec 30).Content; $vs=@(); foreach($m in [regex]::Matches($h, '(\d+\.\d+\.\d+)/')){ if($vs -notcontains $m.Groups[1].Value){ $vs+=,$m.Groups[1].Value } }; $last=$null; foreach($v in $vs){ try{ if((-not $last) -or ([version]$v -gt [version]$last)){ $last=$v } }catch{} }; if(-not $last){ exit 1 }; $u='https://dist.torproject.org/torbrowser/'+$last+'/tor-expert-bundle-'+$env:OC_TFILE+'-'+$last+'.tar.gz'; [IO.File]::WriteAllText($env:OC_TOUT, $u); exit 0 }catch{ exit 1 }" >nul 2>&1
+"%PSX%" -NoProfile -Command "try{[Net.ServicePointManager]::SecurityProtocol=[Net.SecurityProtocolType]::Tls12; $h=(Invoke-WebRequest -UseBasicParsing -Uri 'https://dist.torproject.org/torbrowser/' -TimeoutSec 30).Content; $vs=@(); foreach($m in [regex]::Matches($h, '(\d+\.\d+(?:\.\d+)?)/')){ if($vs -notcontains $m.Groups[1].Value){ $vs+=,$m.Groups[1].Value } }; $last=$null; foreach($v in $vs){ try{ if((-not $last) -or ([version]$v -gt [version]$last)){ $last=$v } }catch{} }; if(-not $last){ exit 1 }; $u='https://dist.torproject.org/torbrowser/'+$last+'/tor-expert-bundle-'+$env:OC_TFILE+'-'+$last+'.tar.gz'; [IO.File]::WriteAllText($env:OC_TOUT, $u); exit 0 }catch{ exit 1 }" >nul 2>&1
 set "TGZURL="
 if exist "%OC_TORDL%" for /f "usebackq delims=" %%u in ("%OC_TORDL%") do set "TGZURL=%%u"
 if exist "%OC_TORDL%" del /f /q "%OC_TORDL%" >nul 2>&1
@@ -2515,7 +2494,11 @@ set "HTTPS_PROXY=%KEEP_SP%"
 echo   [tor] unpacking...
 set "OC_TGZ=%TGZ%"
 set "OC_TDIR=%TOR_DIR%"
-tar.exe -xzf "%TGZ%" -C "%TOR_DIR%" >nul 2>&1
+REM v2.28: the Windows tar by full path - a GNU tar from Git/MSYS earlier in PATH
+REM reads "C:\..." as host:file and unpacks nothing.
+set "TAREXE=tar.exe"
+if exist "%SystemRoot%\System32\tar.exe" set "TAREXE=%SystemRoot%\System32\tar.exe"
+"%TAREXE%" -xzf "%TGZ%" -C "%TOR_DIR%" >nul 2>&1
 if exist "%TGZ%" del /f /q "%TGZ%" >nul 2>&1
 call :tor_find_exe
 if defined TOR_EXE (
@@ -2885,7 +2868,6 @@ timeout /t 2 /nobreak >nul 2>&1
 goto :eof
 
 REM - download and silently install the official desktop app (v2.27)
-REM shortcut: size gate only, no hash check - pin the asset digest if needed.
 :install_desktop
 set "OC_DESK_SCANNED="
 if "%REAL86%"=="1" goto :id_no86
@@ -2894,7 +2876,10 @@ set "HAVE_CURL=%HAVE%"
 set "ID_ARCH=x64"
 if /i "%PROCESSOR_ARCHITECTURE%"=="ARM64" set "ID_ARCH=arm64"
 if /i "%PROCESSOR_ARCHITEW6432%"=="ARM64" set "ID_ARCH=arm64"
-set "ID_URL=%DESKTOP_URL_BASE%/opencode-desktop-win-%ID_ARCH%.exe"
+set "ID_FILE=opencode-desktop-win-%ID_ARCH%.exe"
+call :oc_api desktop "%ID_FILE%"
+if not defined OCA_URL goto :id_noapi
+set "ID_URL=%OCA_URL%"
 set "ID_EXE=%TEMP%\opencode-desktop-setup.exe"
 if exist "%ID_EXE%" del /f /q "%ID_EXE%" >nul 2>&1
 REM download direct: the user's own proxy variables are put back below
@@ -2904,7 +2889,7 @@ set "HTTP_PROXY="
 set "HTTPS_PROXY="
 set "OC_URL=%ID_URL%"
 set "OC_OUT=%ID_EXE%"
-echo   downloading the OpenCode desktop installer, about 120 MB...
+echo   downloading the OpenCode desktop installer %OCA_VER%, about 250 MB...
 if "%HAVE_CURL%"=="1" goto :id_curl
 "%PSX%" -NoProfile -Command "try{[Net.ServicePointManager]::SecurityProtocol=[Net.SecurityProtocolType]::Tls12; Invoke-WebRequest -UseBasicParsing -Uri $env:OC_URL -OutFile $env:OC_OUT}catch{}" >nul 2>&1
 goto :id_check
@@ -2918,7 +2903,11 @@ set "HTTP_PROXY=%ID_HP%"
 set "HTTPS_PROXY=%ID_SP%"
 set "ID_OK=0"
 if exist "%ID_EXE%" for %%M in ("%ID_EXE%") do if not "%%~zM"=="" if %%~zM GTR 50000000 set "ID_OK=1"
-if "%ID_OK%"=="1" goto :id_run
+if not "%ID_OK%"=="1" goto :id_bad
+call :oc_sha "%ID_EXE%" "%OCA_SHA%"
+if "%SHAOK%"=="1" goto :id_run
+echo   [!] checksum mismatch - the download is not the official file.
+:id_bad
 echo   [!] download failed.
 echo       grab it by hand and run it: %ID_URL%
 echo       or from the website: https://opencode.ai/download
@@ -2930,8 +2919,60 @@ set "OC_ID=%ID_EXE%"
 "%PSX%" -NoProfile -Command "try{Start-Process $env:OC_ID -ArgumentList '/S' -Wait}catch{}" >nul 2>&1
 del /f /q "%ID_EXE%" >nul 2>&1
 goto :eof
+:id_noapi
+echo   [!] could not read the official release info from opencode.ai.
+echo       get the installer by hand: https://opencode.ai/download
+goto :eof
 :id_no86
 echo   [!] the desktop app has no 32-bit Windows build.
+goto :eof
+
+REM - official release metadata (v2.28)
+REM usage: call :oc_api <cli|desktop> "<file name or empty>"
+REM Sets OCA_VER, and for a file name also OCA_URL / OCA_SHA / OCA_SIZE. All of
+REM them stay empty when the answer is missing; the call is direct (no proxy).
+:oc_api
+set "OCA_VER="
+set "OCA_URL="
+set "OCA_SHA="
+set "OCA_SIZE="
+set "OC_AKIND=%~1"
+set "OC_AFILE=%~2"
+set "OC_AOUT=%TEMP%\oc_api_%RANDOM%%RANDOM%.txt"
+if exist "%OC_AOUT%" del /f /q "%OC_AOUT%" >nul 2>&1
+set "KEEP_HP=%HTTP_PROXY%"
+set "KEEP_SP=%HTTPS_PROXY%"
+set "HTTP_PROXY="
+set "HTTPS_PROXY="
+"%PSX%" -NoProfile -Command "try{[Net.ServicePointManager]::SecurityProtocol=[Net.SecurityProtocolType]::Tls12; $j=Invoke-RestMethod -Uri ($env:OC_API_BASE+'/'+$env:OC_AKIND+'/opencode/') -TimeoutSec 20; $l=[string]$j.version; if($env:OC_AFILE){ $f=$j.metadata.files.($env:OC_AFILE); if($f){ $l+='|'+$f.url+'|'+$f.sha256+'|'+$f.size } else { $l='' } }; if($l){ [IO.File]::WriteAllText($env:OC_AOUT,$l) } }catch{}" >nul 2>&1
+set "HTTP_PROXY=%KEEP_HP%"
+set "HTTPS_PROXY=%KEEP_SP%"
+if exist "%OC_AOUT%" for /f "usebackq tokens=1-4 delims=|" %%a in ("%OC_AOUT%") do (set "OCA_VER=%%a" & set "OCA_URL=%%b" & set "OCA_SHA=%%c" & set "OCA_SIZE=%%d")
+if exist "%OC_AOUT%" del /f /q "%OC_AOUT%" >nul 2>&1
+goto :eof
+
+REM - SHA-256 of a download against the published one: SHAOK=1 when they match
+REM usage: call :oc_sha "<file>" "<sha256>"
+:oc_sha
+set "SHAOK=0"
+set "OC_SF=%~1"
+set "OC_SX=%~2"
+if not defined OC_SX goto :eof
+"%PSX%" -NoProfile -Command "try{ if((Get-FileHash -LiteralPath $env:OC_SF -Algorithm SHA256).Hash -ieq $env:OC_SX){exit 0}else{exit 1} }catch{exit 1}" >nul 2>&1
+if not errorlevel 1 set "SHAOK=1"
+goto :eof
+
+REM - the official Windows CLI zip for this CPU: sets OC_AFILE
+REM x64 needs AVX2; older CPUs get the -baseline build (the npm script's rule).
+:oc_cli_file
+set "OCARCH=x64"
+if /i "%PROCESSOR_ARCHITECTURE%"=="ARM64" set "OCARCH=arm64"
+if /i "%PROCESSOR_ARCHITEW6432%"=="ARM64" set "OCARCH=arm64"
+set "OC_AFILE=opencode-windows-%OCARCH%.zip"
+if not "%OCARCH%"=="x64" goto :eof
+set "AVX2="
+for /f "usebackq delims=" %%v in (`%PSX% -NoProfile -Command "try{ $t=Add-Type -MemberDefinition ('[DllImport(' + [char]34 + 'kernel32.dll' + [char]34 + ')] public static extern bool IsProcessorFeaturePresent(int f);') -Name K32 -Namespace OCW -PassThru; if($t::IsProcessorFeaturePresent(40)){ 'yes' } }catch{ 'yes' }"`) do set "AVX2=%%v"
+if not defined AVX2 set "OC_AFILE=opencode-windows-x64-baseline.zip"
 goto :eof
 
 REM - locate the OpenCode desktop exe (OC_APP first, then the usual installs)
@@ -3187,31 +3228,56 @@ REM (unverified) API check. Offered at the end instead of failing the mode.
 set "TRACE_ONLY="
 set "PLIST=%STATE_DIR%\proxy_list.txt"
 if exist "%PLIST%" del /f /q "%PLIST%" >nul 2>&1
-echo   [proxy] fetching free list...
+echo   [proxy] reading the proxy list...
+set "PRAW=%STATE_DIR%\proxy_list_raw.txt"
+if exist "%PRAW%" del /f /q "%PRAW%" >nul 2>&1
+set "PSRC="
+if not defined PROXY_LIST_URL goto :pfp_nolist
+set "PSRC=%PROXY_LIST_URL:"=%"
+if not defined PSRC goto :pfp_nolist
+if /i "%PSRC:~0,7%"=="http://" goto :pfp_url
+if /i "%PSRC:~0,8%"=="https://" goto :pfp_url
+if /i "%PSRC:~0,6%"=="ftp://" goto :pfp_url
+if /i "%PSRC:~0,7%"=="file://" goto :pfp_url
+REM anything else is a local file
+copy /y "%PSRC%" "%PRAW%" >nul 2>&1
+goto :pfp_norm
+:pfp_url
 set "KEEP_HP=%HTTP_PROXY%"
 set "KEEP_SP=%HTTPS_PROXY%"
 set "HTTP_PROXY="
 set "HTTPS_PROXY="
-if "%HAVE_CURL%"=="1" (
-  curl.exe -L -f -s --max-time 20 --noproxy "*" -o "%PLIST%" "%PROXY_LIST_URL%" >nul 2>&1
-) else (
-  set "OC_URL=%PROXY_LIST_URL%"
-  set "OC_OUT=%PLIST%"
-  "%PSX%" -NoProfile -Command "try{[Net.ServicePointManager]::SecurityProtocol=[Net.SecurityProtocolType]::Tls12; Invoke-WebRequest -UseBasicParsing -Uri $env:OC_URL -OutFile $env:OC_OUT -TimeoutSec 20}catch{}" >nul 2>&1
-)
+if "%HAVE_CURL%"=="1" goto :pfp_curl
+set "OC_URL=%PSRC%"
+set "OC_OUT=%PRAW%"
+"%PSX%" -NoProfile -Command "try{[Net.ServicePointManager]::SecurityProtocol=[Net.SecurityProtocolType]::Tls12; Invoke-WebRequest -UseBasicParsing -Uri $env:OC_URL -OutFile $env:OC_OUT -TimeoutSec 20}catch{}" >nul 2>&1
+goto :pfp_dl_done
+:pfp_curl
+curl.exe -L -f -s --max-time 20 --noproxy "*" -o "%PRAW%" "%PSRC%" >nul 2>&1
+:pfp_dl_done
 set "HTTP_PROXY=%KEEP_HP%"
 set "HTTPS_PROXY=%KEEP_SP%"
-REM v2.21: strip a UTF-8 BOM if the list was saved by a text editor, so
-REM the first line still parses as a proxy (or as a comment).
-set "OC_PLIST=%PLIST%"
-"%PSX%" -NoProfile -Command "$p=$env:OC_PLIST; try{ $b=[IO.File]::ReadAllBytes($p); if($b.Length -ge 3 -and $b[0] -eq 0xEF -and $b[1] -eq 0xBB -and $b[2] -eq 0xBF){ [IO.File]::WriteAllBytes($p, $b[3..($b.Length-1)]) } }catch{}" >nul 2>&1
-if not exist "%PLIST%" exit /b 1
+REM v2.21: an error page is not a list: PROXY_LIST_MIN_BYTES gates downloads
+REM only; a short local list of one proxy is fine.
+if not exist "%PRAW%" exit /b 1
 set "PLSZ=0"
-for %%F in ("%PLIST%") do set "PLSZ=%%~zF"
-REM v2.21: the minimum is now configurable (PROXY_LIST_MIN_BYTES,
-REM default 20, 0 = no gate), so a short custom list is not rejected.
-REM An empty file still dies later: the loop finds no candidates.
+for %%F in ("%PRAW%") do set "PLSZ=%%~zF"
 if %PLSZ% LSS %PROXY_LIST_MIN_BYTES% exit /b 1
+:pfp_norm
+if not exist "%PRAW%" goto :pfp_nolist
+REM Read any list format and write one http://host:port per line (v2.28).
+REM The normalizer lives at the end of this file (#>>>OC_PLIST_PS).
+set "OC_PRAW=%PRAW%"
+set "OC_PLIST=%PLIST%"
+set "PCOUNT="
+for /f "usebackq delims=" %%n in (`%PSX% -NoProfile -Command "$l=Get-Content -LiteralPath $env:OCI_SELF; $i=[Array]::IndexOf($l,'#>>>OC_PLIST_PS'); $e=[Array]::IndexOf($l,'#>>>OC_ENDPLIST'); if(($i -lt 0) -or ($e -le $i)){exit 1}; Invoke-Expression (($l[($i+1)..($e-1)]) -join [Environment]::NewLine)"`) do set "PCOUNT=%%n"
+if not defined PCOUNT goto :pfp_nolist
+echo   [proxy] %PCOUNT% proxies in the list
+goto :pfp_listok
+:pfp_nolist
+echo   [!] no proxies found in "%PSRC%"
+exit /b 1
+:pfp_listok
 set /a PTRY=0
 for /f "usebackq delims=" %%p in ("%PLIST%") do (
   set "CAND=%%p"
@@ -3757,6 +3823,152 @@ try {
     Write-BridgeLog ('listener: ' + $_.Exception.Message)
 }
 #>>>OC_ENDTORBRIDGE
+#>>>OC_PLIST_PS
+# Proxy list normalizer. Reads OC_PRAW (any text: plain, CSV, JSON, NDJSON,
+# XML, HTML, sorted or not, ip:port or split fields), writes OC_PLIST with one
+# http://host:port per line (first-seen order, no duplicates, no SOCKS) and
+# prints the count. Prints nothing when no proxy was found.
+try {
+  $ErrorActionPreference = 'Stop'
+  $b = [IO.File]::ReadAllBytes($env:OC_PRAW)
+  if ($b.Length -ge 2 -and $b[0] -eq 0xFF -and $b[1] -eq 0xFE) { $t = [Text.Encoding]::Unicode.GetString($b, 2, $b.Length - 2) }
+  elseif ($b.Length -ge 2 -and $b[0] -eq 0xFE -and $b[1] -eq 0xFF) { $t = [Text.Encoding]::BigEndianUnicode.GetString($b, 2, $b.Length - 2) }
+  elseif ($b.Length -ge 3 -and $b[0] -eq 0xEF -and $b[1] -eq 0xBB -and $b[2] -eq 0xBF) { $t = [Text.Encoding]::UTF8.GetString($b, 3, $b.Length - 3) }
+  else { $t = [Text.Encoding]::UTF8.GetString($b) }
+  $out = New-Object 'Collections.Generic.List[string]'
+  $seen = New-Object 'Collections.Generic.HashSet[string]'
+  $oct = '(?:25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)'
+  $ipPat = "(?:$oct\.){3}$oct"
+  $hostPat = '[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?(?:\.[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?)*\.[A-Za-z]{2,}'
+  $sep = '[\s,;|"'']{1,6}'
+  $hostRe = New-Object Text.RegularExpressions.Regex("^($ipPat|$hostPat)$")
+  $credRe = New-Object Text.RegularExpressions.Regex('^[A-Za-z0-9._~%-]+:[A-Za-z0-9._~%-]+$')
+
+  function Add-P($scheme, $cred, $h, $p) {
+    $n = 0
+    if (-not [int]::TryParse([string]$p, [ref]$n)) { return }
+    if ($n -lt 1 -or $n -gt 65535) { return }
+    $h = ([string]$h).Trim().ToLower()
+    if (-not $hostRe.IsMatch($h)) { return }
+    $s = ([string]$scheme).ToLower()
+    if ($s -like 'socks*') { return }
+    if ($s -ne 'https') { $s = 'http' }
+    $u = ''
+    if ($cred) {
+      if (-not $credRe.IsMatch($cred)) { return }
+      $u = $cred + '@'
+    }
+    if ($seen.Add($s + '://' + $u + $h + ':' + $n)) { $out.Add($s + '://' + $u + $h + ':' + $n) }
+  }
+
+  # Free text: scheme://user:pass@host:port, host:port, then "ip<sep>port"
+  # (CSV, tables, tabs) and "port<sep>ip". A line that names socks is skipped
+  # unless it carries an explicit http(s):// proxy.
+  function Scan-Text([string]$s) {
+    $s = $s -replace '<[^>]+>', ' ' -replace '&nbsp;|&#160;', ' '
+    $re = "(?i)(?<![\w.@-])(?:(https?|socks[45]h?)://)?(?:([A-Za-z0-9._~%-]+:[A-Za-z0-9._~%-]+)@)?($ipPat|$hostPat):(\d{1,5})(?!\d)"
+    $reB = "(?<![\d.])($ipPat)$sep(\d{2,5})(?![\d.A-Za-z])"
+    $reC = "(?<![\d.])(\d{2,5})$sep($ipPat)(?![\d.])"
+    $evA = [Text.RegularExpressions.MatchEvaluator]{
+      param($m)
+      $isIp = $m.Groups[3].Value -match "^$ipPat$"
+      if ($isIp -or $m.Groups[1].Success -or $script:curLine -eq $m.Value) { Add-P $m.Groups[1].Value $m.Groups[2].Value $m.Groups[3].Value $m.Groups[4].Value; return ' ' }
+      return $m.Value
+    }
+    $evB = [Text.RegularExpressions.MatchEvaluator]{ param($m) Add-P 'http' '' $m.Groups[1].Value $m.Groups[2].Value; return ' ' }
+    $evC = [Text.RegularExpressions.MatchEvaluator]{ param($m) Add-P 'http' '' $m.Groups[2].Value $m.Groups[1].Value; return ' ' }
+    foreach ($line in ($s -split '\r?\n')) {
+      $line = $line.Trim()
+      if (-not $line -or $line.StartsWith('#') -or $line.StartsWith(';')) { continue }
+      $script:curLine = $line
+      $rest = [regex]::Replace($line, $re, $evA)
+      if ($rest -match '(?i)socks') { continue }
+      $rest = [regex]::Replace($rest, $reB, $evB)
+      [void][regex]::Replace($rest, $reC, $evC)
+    }
+  }
+
+  $hostKeys = @('ip', 'ip_address', 'ipaddress', 'host', 'hostname', 'address', 'proxy_address', 'proxy_ip', 'proxyip', 'server')
+  $portKeys = @('port', 'proxy_port', 'proxyport')
+  $typeKeys = @('protocol', 'protocols', 'type', 'scheme', 'proxy_type', 'proxytype')
+  function Pick($pairs, $keys) {
+    foreach ($k in $keys) { foreach ($pr in $pairs) { if ($pr.Key -ieq $k -and $null -ne $pr.Value -and "$($pr.Value)" -ne '') { return $pr.Value } } }
+    return $null
+  }
+  # one record = a flat list of @{Key;Value} pairs (JSON object or XML element)
+  function Add-Record($pairs) {
+    $h = Pick $pairs $hostKeys; $p = Pick $pairs $portKeys
+    if ($null -eq $h -or $null -eq $p -or "$h" -match ':\d+$') { return $false }
+    $ty = ''
+    $tv = Pick $pairs $typeKeys
+    if ($null -ne $tv) { foreach ($x in @($tv)) { $ty += " $x" } }
+    if ($ty -match '(?i)socks' -and $ty -notmatch '(?i)http') { return $true }
+    $us = Pick $pairs @('username', 'user'); $pw = Pick $pairs @('password', 'pass')
+    $cred = ''
+    if ($us -and $pw) { $cred = "$us`:$pw" }
+    Add-P 'http' $cred $h $p
+    return $true
+  }
+  $recKeys = $hostKeys + $portKeys + $typeKeys
+  function Walk-Json($o) {
+    if ($null -eq $o) { return }
+    if ($o -is [string]) { Scan-Text $o; return }
+    if ($o -is [System.Management.Automation.PSCustomObject]) {
+      $pairs = @(); $flat = @()
+      foreach ($pr in $o.PSObject.Properties) {
+        $e = @{ Key = $pr.Name; Value = $pr.Value }
+        $pairs += $e
+        if ($pr.Value -isnot [System.Management.Automation.PSCustomObject]) { $flat += $e }
+      }
+      $used = Add-Record $flat
+      foreach ($pr in $pairs) {
+        $v = $pr.Value
+        if ($v -is [string]) { if (-not ($used -and ($recKeys -contains $pr.Key))) { Scan-Text $v } }
+        elseif ($v -is [System.Management.Automation.PSCustomObject] -or $v -is [array]) { Walk-Json $v }
+      }
+      return
+    }
+    if ($o -is [System.Collections.IEnumerable]) { foreach ($x in $o) { Walk-Json $x } }
+  }
+  function Walk-Xml($n) {
+    if ($n.NodeType -ne 'Element') { return }
+    $kids = @(); $pairs = @()
+    foreach ($a in $n.Attributes) { $pairs += @{ Key = $a.Name; Value = $a.Value } }
+    foreach ($k in $n.ChildNodes) {
+      if ($k.NodeType -eq 'Element') {
+        $kids += $k
+        $leaf = $true
+        foreach ($g in $k.ChildNodes) { if ($g.NodeType -eq 'Element') { $leaf = $false; break } }
+        if ($leaf) { $pairs += @{ Key = $k.Name; Value = $k.InnerText } }
+      }
+    }
+    [void](Add-Record $pairs)
+    if ($kids.Count -eq 0) { Scan-Text $n.InnerText; return }
+    foreach ($k in $kids) { Walk-Xml $k }
+  }
+
+  $tt = $t.TrimStart()
+  if ($tt.StartsWith('{') -or $tt.StartsWith('[')) {
+    $j = $null
+    try { $j = $tt | ConvertFrom-Json } catch { $j = $null }
+    if ($null -ne $j) { Walk-Json $j }
+    else {
+      foreach ($line in ($tt -split '\r?\n')) {
+        $l = $line.Trim().TrimEnd(',')
+        if ($l.StartsWith('{') -or $l.StartsWith('[')) { try { Walk-Json ($l | ConvertFrom-Json) } catch { } }
+      }
+    }
+  }
+  elseif ($tt.StartsWith('<')) {
+    try { $x = New-Object Xml.XmlDocument; $x.LoadXml($tt); Walk-Xml $x.DocumentElement } catch { }
+  }
+  if ($out.Count -eq 0) { Scan-Text $t }
+  if ($out.Count -gt 0) {
+    [IO.File]::WriteAllLines($env:OC_PLIST, $out.ToArray(), (New-Object Text.UTF8Encoding($false)))
+    Write-Output $out.Count
+  }
+} catch { }
+#>>>OC_ENDPLIST
 
 #>>>OC_PICKER_PS
 $ErrorActionPreference = 'Stop'
