@@ -2,7 +2,7 @@
 setlocal EnableExtensions
 title OpenCode launcher updater
 REM ============================================================
-REM  Updates the OpenCode launcher from the repo, on any machine,
+REM  Updates the OpenCode launcher from the latest Release, on any machine,
 REM  anywhere. Runs the SAME logic on every Windows 10/11 box:
 REM  no local paths, user folders and temp via environment only.
 REM
@@ -13,9 +13,22 @@ REM    3) OneDrive Desktop redirection, when it exists
 REM  If the launcher is nowhere, it is written fresh to the Desktop.
 REM ============================================================
 
-REM v2.12: resolve the newest commit SHA first, then pin the raw URL to it.
-REM A raw/main URL can serve a stale CDN copy for minutes after a push; a
-REM raw/<SHA>/ URL is always the exact bytes of that commit.
+REM v2.25: the primary source is the LATEST GitHub RELEASE asset. A release
+REM asset is a fixed, published file: no CDN lag and no half-pushed branch.
+REM If the release cannot be reached (offline, none published yet) the old
+REM path is the fallback: newest commit SHA on main, raw URL pinned to it.
+set "TMPBAT=%TEMP%\opencode_infinite_latest.bat"
+if exist "%TMPBAT%" del /f /q "%TMPBAT%" >nul 2>&1
+set "REMOTE=https://github.com/jeko1107/opencode-infinite/releases/latest/download/OpenCode-Infinite.bat"
+
+echo Downloading the newest launcher (latest Release)...
+curl.exe -L -f -s --max-time 60 -o "%TMPBAT%" "%REMOTE%" >nul 2>&1
+if not errorlevel 1 goto size_gate
+powershell -NoProfile -Command "try{[Net.ServicePointManager]::SecurityProtocol=[Net.SecurityProtocolType]::Tls12; Invoke-WebRequest -UseBasicParsing -Uri $env:REMOTE -OutFile $env:TMPBAT -TimeoutSec 60}catch{exit 1}" >nul 2>&1
+if not errorlevel 1 goto size_gate
+
+echo   Release not reachable - trying the repo copy on main...
+if exist "%TMPBAT%" del /f /q "%TMPBAT%" >nul 2>&1
 set "SHAOUT=%TEMP%\opencode_update_sha.txt"
 set "HASHIK="
 powershell -NoProfile -Command "try{[Net.ServicePointManager]::SecurityProtocol=[Net.SecurityProtocolType]::Tls12; $r = Invoke-RestMethod -UseBasicParsing -Uri 'https://api.github.com/repos/jeko1107/opencode-infinite/commits/main' -TimeoutSec 15; if ($r.sha -match '^[0-9a-f]{40}$') { [IO.File]::WriteAllText($env:SHAOUT, $r.sha) } }catch{}" >nul 2>&1
@@ -23,17 +36,10 @@ if exist "%SHAOUT%" for /f "usebackq delims=" %%s in ("%SHAOUT%") do set "HASHIK
 if exist "%SHAOUT%" del /f /q "%SHAOUT%" >nul 2>&1
 set "REMOTE=https://raw.githubusercontent.com/jeko1107/opencode-infinite/main/OpenCode%%20Infinite.bat"
 if not "%HASHIK%"=="" set "REMOTE=https://raw.githubusercontent.com/jeko1107/opencode-infinite/%HASHIK%/OpenCode%%20Infinite.bat"
-set "TMPBAT=%TEMP%\opencode_infinite_latest.bat"
-if exist "%TMPBAT%" del /f /q "%TMPBAT%" >nul 2>&1
-
-echo Downloading the newest launcher...
 curl.exe -L -f -s --max-time 60 -o "%TMPBAT%" "%REMOTE%" >nul 2>&1
 if not errorlevel 1 goto size_gate
-REM curl.exe exists on Windows 10/11; the branch below still covers
-REM anything stripped of it (Server editions, older images).
 powershell -NoProfile -Command "try{[Net.ServicePointManager]::SecurityProtocol=[Net.SecurityProtocolType]::Tls12; Invoke-WebRequest -UseBasicParsing -Uri $env:REMOTE -OutFile $env:TMPBAT -TimeoutSec 60}catch{exit 1}" >nul 2>&1
 if errorlevel 1 goto fail_net
-
 :size_gate
 set "SIZEOK="
 if exist "%TMPBAT%" for %%s in ("%TMPBAT%") do if %%~zs GEQ 20000 set "SIZEOK=1"

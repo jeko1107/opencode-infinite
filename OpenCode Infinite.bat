@@ -2,14 +2,16 @@
 setlocal EnableExtensions
 title OpenCode
 REM ============================================================
-REM  OpenCode launcher  (v2.21)
+REM  OpenCode launcher  (v2.25)
 REM  Multi-egress (WARP / TOR / free HTTP) + dependency bootstrap
 REM  + auto-resume.
+REM  v2.22 - v2.25: every fixed bug carries an inline "REM v2.2x:"
+REM  note.
 REM
 REM  Usage:
 REM    double-click                          -> folder menu
 REM    drag a folder onto this file          -> opens in that folder
-REM    "OpenCode Infinite v2.21.bat" "D:\work\project"
+REM    "OpenCode Infinite.bat" "D:\work\project"
 REM                                          -> opens in that folder
 REM
 REM  This script never moves, renames or deletes your chats, your
@@ -52,8 +54,9 @@ REM    silent when npm or the network is unavailable.
 REM
 REM  - After the workspace is chosen, asks for the egress mode:
 REM      [1] WARP   - Cloudflare WARP proxy mode (rotation supported)
-REM      [2] TOR    - local Tor SOCKS via an HTTP bridge (Privoxy
-REM                   on 127.0.0.1:8118, process-only)
+REM      [2] TOR    - local Tor SOCKS through the launcher's own built-in
+REM                   HTTP bridge on 127.0.0.1:8118 (process-only; no
+REM                   Privoxy and nothing else to install)
 REM      [3] PROXY  - free HTTP proxies from the ProxyScrape list
 REM                   (process-only; dead ones are skipped)
 REM      [4] NONE   - direct, no proxy
@@ -63,17 +66,19 @@ REM    Tor Expert Bundle (a tar.gz: no installer, no UAC, no service)
 REM    is downloaded once into the launcher state folder, started
 REM    hidden, and exposed as an HTTP proxy through a tiny built-in
 REM    bridge process, so no Privoxy install is needed. A Tor already
-REM    running (Tor Browser or a user tor on the SOCKS port) is used
-REM    as it is and never killed by this launcher. All of it is
-REM    removed from memory again on exit, files stay portable.
+REM    running (Tor Browser on 9150 or a user tor on 9050) is used as it
+REM    is and never killed by this launcher. All of it is removed from
+REM    memory again on exit, files stay portable.
 REM
-REM  - In TOR mode no WARP rotation runs: a retry restarts the
-REM    resume on the same circuit. In PROXY mode a retry picks
-REM    another free proxy. NONE returns to the menu.
+REM  - In TOR mode a burned circuit is renewed by restarting the Tor the
+REM    launcher started, with a bounded attempt counter before the menu
+REM    takes over. In PROXY mode a retry picks another free proxy. NONE
+REM    returns to the menu.
 REM
 REM  - Rotates the WARP egress IP through the local proxy: drops the
 REM    old registration, creates a new one, verifies the trace says
-REM    warp=on, and starts the tunnel in proxy mode. Every warp-cli
+REM    warp=on (v2.22: or warp=plus, the WARP+ answer), and starts the
+REM    tunnel in proxy mode. Every warp-cli
 REM    call is time-bounded and logged to wcli.log, with the daemon's
 REM    own error text on every failure, so a wedge is readable instead
 REM    of a private salt of exit codes. A missing WARP registration is
@@ -91,20 +96,16 @@ REM    limit-shaped answers mark an IP burned; any other probe failure
 REM    stops the hunt and is printed, because rotation cannot fix a
 REM    broken probe. IP_FIND_MAX=0 keeps hunting until one works.
 REM
-REM  - TOR mode is fully self-contained: the launcher either uses a Tor
-REM    already running (never touches or kills it) or downloads the
-REM    portable Tor Expert Bundle once, runs it hidden, and exposes it
-REM    as an HTTP proxy through a tiny built-in bridge, so no Privoxy
-REM    install is needed. The spawn is verified live two seconds in, so
-REM    a tor that refuses its config fails loudly with its own reason
-REM    instead of leaving a dead pid behind; the torrc carries the
-REM    Windows paths as forward slashes because tor treats a backslash
-REM    inside double quotes as an escape sequence; the bridge serves
-REM    every connection in its own PowerShell runspace (worker threads
-REM    cannot run PowerShell functions), so parallel HTTP traffic is
-REM    served correctly. Bugs there read as a hang at the TOR readiness
-REM    prompt, which is why each piece fails loudly with a printed
-REM    reason now.
+REM  - TOR mode is fully self-contained. The details that are easy to get
+REM    wrong: the spawn is verified live two seconds in, so a tor that
+REM    refuses its config fails loudly with its own reason instead of
+REM    leaving a dead pid behind; the torrc carries the Windows paths as
+REM    forward slashes because tor treats a backslash inside double quotes
+REM    as an escape sequence; the bridge serves every connection in its own
+REM    PowerShell runspace (worker threads cannot run PowerShell functions),
+REM    so parallel HTTP traffic is served correctly. Bugs there read as a
+REM    hang at the TOR readiness prompt, which is why each piece fails
+REM    loudly with a printed reason.
 REM
 REM  - Watches the log while opencode runs. A fatal line (drain
 REM    failure, usage limit, rate limit, quota, credits) kills the TUI
@@ -140,7 +141,7 @@ REM    swaps the new one in through a helper on a post-exit window.
 REM
 REM  All tunables live in the settings block below: rotation tries,
 REM  probe on/off and its model, resume message and timeout, WARP
-REM  timings, log watching, the proxy port, TOR/Privoxy ports, the
+REM  timings, log watching, the proxy port, the Tor bridge port, the
 REM  ProxyScrape URL, and the self-update.
 REM ============================================================
 
@@ -199,8 +200,9 @@ REM --- multi-egress tunables ---
 REM TOR SOCKS port (default Tor Browser / tor service). Informational:
 REM the launcher talks to the HTTP bridge, never to this port directly.
 set "TOR_SOCKS_PORT=9050"
-REM Privoxy (or any HTTP->SOCKS bridge) listen port. Required because
-REM OpenCode/Bun does not speak SOCKS5 natively; only HTTP_PROXY works.
+REM v2.24: this is the launcher's OWN built-in HTTP->SOCKS bridge, not
+REM Privoxy. Required because OpenCode/Bun does not speak SOCKS5 natively;
+REM only HTTP_PROXY works.
 set "TOR_HTTP_PORT=8118"
 REM [2] TOR auto-setup (v2.18): when nothing answers on the TOR ports,
 REM download the portable Tor Expert Bundle once, run it hidden, and
@@ -225,6 +227,16 @@ REM How many free proxies to try before giving up (per rotate).
 set "PROXY_TRY_MAX=12"
 REM Seconds a single free-proxy probe may take.
 set "PROXY_PROBE_TIMEOUT=8"
+REM NEW: how many burned proxies in a row before PROXY mode gives up and
+REM offers Tor. Every proxy that hits the limit is remembered and skipped.
+set "PROXY_ROT_MAX=10"
+REM v2.22: a free proxy must also reach the host opencode's API talks to,
+REM not only the Cloudflare trace, or the TUI dies on its first request.
+REM v2.23: OFF by default. PROXY_API_CHECK_URL was never verified, and a
+REM host that does not resolve rejects every proxy and kills PROXY mode.
+REM Set it to 1 only after checking the URL by hand.
+set "PROXY_API_CHECK=0"
+set "PROXY_API_CHECK_URL=https://api.opencode.ai/"
 
 REM - internal
 REM Local port where the WARP proxy listens (WARP proxy mode).
@@ -263,10 +275,20 @@ set "TOR_EXE="
 set "OURTOR="
 set "OURBRIDGE="
 
+REM v2.22: remember the user's own proxy variables before anything touches
+REM them. They may be set system-wide; every cleanup used to delete them.
+set "OC_HP0=%HTTP_PROXY%"
+set "OC_SP0=%HTTPS_PROXY%"
+set "OC_NP0=%no_proxy%"
+
 REM UTF-8 console: folder paths in any system language survive the
 REM write/read round trip in lastfolder.txt
 REM Note: chcp 65001 changes the code page of the whole console window
 REM for as long as this launcher runs, not only for this script.
+REM v2.22: the original code page is saved here and restored in :quit.
+set "OC_OLDCP="
+for /f "tokens=2 delims=:" %%c in ('chcp') do set "OC_OLDCP=%%c"
+set "OC_OLDCP=%OC_OLDCP: =%"
 chcp 65001 >nul 2>&1
 
 REM Where opencode keeps its data (chats, database, auth).
@@ -308,6 +330,12 @@ set "OC_PROBE_ID=ses_probe0000000"
 REM fatal error family: anything that ends the chat without the user
 REM choosing to stop. The pattern is matched against log lines.
 set "OC_PAT=level=ERROR.*(Failed to drain Session|free usage limit|usage limit reached|rate limit|out of usage|insufficient credits|payment required)"
+REM v2.22: the watcher paths used to be defined only inside :watch_start, so
+REM with WATCH=0 (and in NONE / WARP-without-WARP) :scan_log read an empty
+REM OC_LOGF and always answered NOHIT. They are defined here, once, for the
+REM whole session; :watch_start still uses the same two names.
+set "OC_LOGF=%LOGFILE%"
+set "OC_FATPAT=%OC_PAT%"
 
 REM 32-bit Windows: PROCESSOR_ARCHITEW6432 is defined when a 32-bit
 REM process runs on a 64-bit OS, so x86 alone is not proof.
@@ -325,6 +353,7 @@ call :numcfg WARP_CALL_TIMEOUT 15
 call :numcfg WHERE_TIMEOUT 5
 call :numcfg RESUME_TIMEOUT 90
 call :numcfg PROXY_TRY_MAX 12
+call :numcfg PROXY_ROT_MAX 10
 call :numcfg PROXY_PROBE_TIMEOUT 8
 REM 0 is also valid here: "no size gate on a custom list"
 call :numcfg0 PROXY_LIST_MIN_BYTES 20
@@ -343,6 +372,10 @@ REM v2.20: bound wcli.log too (it only grows on warp-cli failures, but a
 REM dying daemon can fail for weeks - keep the last 400 lines above 200 KB)
 call :trim_log "%STATE_DIR%\wcli.log" 200000 400
 call :lock_check
+REM v2.22: :lock_check no longer jumps to :quit from inside a called
+REM subroutine (that returned to this caller with an emptied scope). It
+REM sets LOCK_BUSY and returns; the exit happens here, at top level.
+if defined LOCK_BUSY goto :quit
 
 REM Once per start: check the repo for a newer launcher. Silent when
 REM nothing to do or offline; asks before ever replacing this file.
@@ -387,21 +420,23 @@ echo       "%CD%"
 echo   [3] Browse for a folder...
 echo   [4] Exit
 echo.
-echo   One key, no Enter. ESC exits like [4].
+echo   One key, no Enter.
 echo.
-REM Raw key read first, classic choice as the headless fallback.
-call :readkey
-if "%READKEY%"=="HEADLESS" goto :folder_choice
-if /i "%READKEY%"=="ESC" goto :quit
-if /i "%READKEY%"=="4" goto :quit
-if /i "%READKEY%"=="3" goto :pick_folder
-if /i "%READKEY%"=="2" goto :use_current
-if /i "%READKEY%"=="1" goto :folder_1
-goto :folder
+REM v2.22: choice is the main path again. Every keypress used to start a
+REM fresh PowerShell just to read one character; ESC is no longer read
+REM here, [4] exits.
+REM v2.23: the raw-key reader :readkey is gone - nothing called it any more
+REM and every keypress used to cost a PowerShell start.
+goto :folder_choice
 
 :folder_choice
 REM choice returns the key number through errorlevel: check highest first.
 choice /c 1234 /n /m "Pick: "
+REM v2.22: errorlevel 0 (Ctrl+C) redraws the menu instead of falling through
+REM to option [1] and forcing the last folder.
+REM v2.25: stdin closed answers 255 - leave instead of looping.
+if errorlevel 100 goto :quit
+if not errorlevel 1 goto :folder
 if errorlevel 4 goto :quit
 if errorlevel 3 goto :pick_folder
 if errorlevel 2 goto :use_current
@@ -468,20 +503,6 @@ goto :eof
 call :olog "picker: %OC_MODE% returned nothing"
 goto :eof
 
-REM Read one raw console key without waiting for Enter. Result in READKEY:
-REM a letter/digit, ESC, ? (ignored key) or HEADLESS when the console is
-REM not interactive (UTF holdover: RawUI fails under redirected stdin or a
-REM non-console host, the menu then falls back to the classic choice line).
-:readkey
-set "READKEY="
-set "RK_OUT=%TEMP%\oc_key_%RANDOM%.txt"
-if exist "%RK_OUT%" del /f /q "%RK_OUT%" >nul 2>&1
-"%PSX%" -NoProfile -Command "try{ if([Console]::IsInputRedirected){ throw 'headless stdin' }; $k=$Host.UI.RawUI.ReadKey('NoEcho,IncludeKeyDown').Character; $s=[string]$k; if($k -eq [char]27){ $s='ESC' } elseif($k -notmatch '^[0-9A-Za-z]$'){ $s='?' }; [IO.File]::WriteAllText($env:RK_OUT, $s.ToUpper()) }catch{ [IO.File]::WriteAllText($env:RK_OUT, 'HEADLESS') }" >nul 2>&1
-if exist "%RK_OUT%" for /f "usebackq delims=" %%i in ("%RK_OUT%") do set "READKEY=%%i"
-if exist "%RK_OUT%" del /f /q "%RK_OUT%" >nul 2>&1
-if not defined READKEY set "READKEY=HEADLESS"
-exit /b
-
 REM Check that the chosen folder exists before entering it.
 :folder_ok
 if exist "%OPFOLDER%\" goto :folder_ok2
@@ -530,6 +551,8 @@ echo.
 echo   One key, no Enter.
 echo.
 choice /c 1234 /n /m "Pick egress: "
+REM v2.25: stdin closed answers 255; do not silently pick NONE.
+if errorlevel 100 goto :quit
 if errorlevel 4 (
   set "EGRESS=NONE"
   set "ACTIVE_PROXY="
@@ -548,7 +571,11 @@ if errorlevel 2 (
   set "EGRESS=TOR"
   set "WARP="
   set "ACTIVE_PROXY=http://127.0.0.1:%TOR_HTTP_PORT%"
-  echo   [egress] TOR - expect Tor on :%TOR_SOCKS_PORT% + Privoxy on :%TOR_HTTP_PORT%.
+  REM v2.22: circuit rotation counter, reset every time TOR is chosen.
+  set "TOR_TRIES=0"
+  REM v2.22: the menu still described a manual Privoxy setup; TOR installs
+  REM and bridges itself now.
+  echo   [egress] TOR - portable Tor + built-in bridge on :%TOR_HTTP_PORT%, auto-setup.
   goto :egress_done
 )
 set "EGRESS=WARP"
@@ -615,6 +642,9 @@ if defined OC_CMD goto :ready
 REM Not found: install it (npm first, then the standalone build).
 echo   [auto-install] opencode not found, fetching it...
 call :install_opencode
+REM v2.22: :install_opencode can abort (32-bit with no route) - exit from
+REM here, at top level, where :quit is safe to reach with goto.
+if defined OC_ABORT goto :quit
 call :find_opencode
 if defined OC_CMD (
   echo   [ok] opencode ready.
@@ -641,8 +671,9 @@ REM Main menu. Each pass redraws the screen and checks the IP.
 :menu_loop
 call :trace menu
 REM keep the lock fresh so a second launcher can tell it is alive
-REM The lock folder gets a new stamp each time, so its age shows it is alive.
-if exist "%STATE_DIR%\lock\" echo(%RANDOM%>"%STATE_DIR%\lock\stamp" 2>nul
+REM v2.22: :lock_touch recreates the stamp entry, which is what moves the
+REM folder timestamp (see :lock_check).
+if exist "%STATE_DIR%\lock\" call :lock_touch
 cls
 echo ============================================================
 echo   OpenCode
@@ -695,14 +726,22 @@ echo   [4] Folder        - work in a different folder
 echo   [5] Deep reset    - kill opencode, move chats to the Desktop,
 echo                       clear saved tokens, open a fresh session
 echo   [6] Exit
+REM NEW: option 7 is like [5] but leaves the chats where they are.
+echo   [7] Token reset   - kill opencode, clear saved tokens, keep chats
+echo                       where they are, open a fresh session
 echo.
 echo   One key, no Enter.
 echo.
 REM Read the menu choice. Highest number is checked first.
-choice /c 123456 /n /m "Pick: "
-REM choice exits 0 when stdin has no answer (piped input, EOF): redraw the
-REM menu instead of guessing option 1 and launching on a cold start.
+choice /c 1234567 /n /m "Pick: "
+REM choice exits 0 on Ctrl+C: redraw the menu instead of guessing option 1.
+REM v2.25: with stdin closed (piped input, EOF) choice answers 255, not 0, and
+REM 255 satisfies every "if errorlevel N" below, so the old guard looped here
+REM forever through the token-reset prompt. No console to ask: leave.
+if errorlevel 100 goto :quit
 if not errorlevel 1 goto :menu_loop
+REM NEW: 7 is checked first (highest number first).
+if errorlevel 7 goto :run_soft
 if errorlevel 6 goto :quit
 if errorlevel 5 goto :run_deep
 if errorlevel 4 goto :folder
@@ -713,6 +752,9 @@ goto :run_cold
 REM Option 1 (fresh start): COLD=1 asks for a new IP before launching.
 :run_cold
 set "COLD=1"
+REM NEW: a fresh start forgets the burned proxies.
+del /f /q "%STATE_DIR%\proxy_burned.txt" >nul 2>&1
+set "PROXY_ROT=0"
 goto :run
 
 REM Option 2 (continue): COLD=0 keeps the current IP and session.
@@ -729,6 +771,10 @@ echo --- deep reset -----------------------------------------------
 echo   This closes opencode, moves your chats to the Desktop,
 echo   clears the saved tokens and opens a brand new session.
 echo   It is the only action in this script that touches your files.
+REM v2.22: :stop_opencode kills every opencode.exe on the machine, not only
+REM this session's. Say so before asking.
+echo   It also kills EVERY opencode process on this computer,
+echo   including windows opened by hand or by another launcher.
 echo.
 choice /c yn /n /m "  Do that now? [Y/N] "
 if errorlevel 2 goto :menu_loop
@@ -739,6 +785,43 @@ REM After a reset there is nothing to resume: start cold.
 set "RESUME="
 set "COLD=1"
 goto :run
+
+REM NEW: Option 7 (token reset). Same as option 5 but the chats are NOT moved.
+REM Only the token cache is cleared and auth.json is copied to the Desktop
+REM (verified) before it is removed.
+:run_soft
+echo.
+echo --- token reset ----------------------------------------------
+echo   This closes opencode, clears the saved tokens and opens a
+echo   brand new session. Your chats are NOT moved.
+echo   auth.json is copied to the Desktop first, then removed.
+echo   It also kills EVERY opencode process on this computer,
+echo   including windows opened by hand or by another launcher.
+echo.
+choice /c yn /n /m "  Do that now? [Y/N] "
+if errorlevel 2 goto :menu_loop
+call :stop_opencode
+call :soft_target
+call :clear_tokens
+set "RESUME="
+set "COLD=1"
+goto :run
+
+REM NEW: builds the backup folder for option 7 only. It sets TARGET so
+REM :archive_auth works, and never creates the chats folder. TARGET is
+REM always recomputed so a value left by an earlier deep reset is not reused.
+:soft_target
+if not defined DESKTOP call :find_desktop
+set "STAMP="
+set "OC_OUT=%TEMP%\oc_stm_%RANDOM%.txt"
+if exist "%OC_OUT%" del /f /q "%OC_OUT%" >nul 2>&1
+set "OC_STM=%OC_OUT%"
+"%PSX%" -NoProfile -Command "try{[IO.File]::WriteAllLines($env:OC_STM, (Get-Date -Format yyyyMMdd-HHmmss))}catch{}" >nul 2>&1
+if exist "%OC_OUT%" for /f "usebackq delims=" %%T in ("%OC_OUT%") do set "STAMP=%%T"
+if exist "%OC_OUT%" del /f /q "%OC_OUT%" >nul 2>&1
+if not defined STAMP set "STAMP=r%RANDOM%%RANDOM%"
+set "TARGET=%DESKTOP%\opencode_auth_backup\%STAMP%"
+goto :eof
 
 REM Launch step. Checks the egress first, then starts opencode.
 :run
@@ -767,45 +850,89 @@ if /i "%EGRESS%"=="WARP" (
   if "%COLD%"=="1" call :ensure_new_ip
   goto :run_gate_ok
 )
-if /i "%EGRESS%"=="TOR" (
-  call :tor_gate
-  if errorlevel 1 (
-    echo   [!] Tor did not get ready.
-    choice /c YN /n /m "   Continue direct? [Y/N]: "
-    if errorlevel 2 goto :menu_loop
-    goto :run_noproxy
-  )
-  set "ACTIVE_PROXY=http://127.0.0.1:%TOR_HTTP_PORT%"
-  call :export_proxy_active
-  goto :run_gate_ok
-)
-if /i "%EGRESS%"=="PROXY" (
-  call :pick_free_proxy
-  if errorlevel 1 (
-    echo   [!] no working free proxy found.
-    choice /c YN /n /m "   Continue direct? [Y/N]: "
-    if errorlevel 2 goto :menu_loop
-    goto :run_noproxy
-  )
-  call :export_proxy_active
-  goto :run_gate_ok
-)
+REM v2.22: TOR and PROXY left the parenthesised block and became labelled
+REM steps, so the PROXY branch can test COLD/ACTIVE_PROXY without the
+REM parse-time expansion trap those blocks carry.
+if /i "%EGRESS%"=="TOR" goto :run_tor
+if /i "%EGRESS%"=="PROXY" goto :run_free
+goto :run_noproxy
+
+REM - TOR egress: gate first, then hand the bridge to the child
+:run_tor
+call :tor_gate
+if errorlevel 1 goto :run_tor_fail
+set "ACTIVE_PROXY=http://127.0.0.1:%TOR_HTTP_PORT%"
+call :export_proxy_active
+goto :run_gate_ok
+:run_tor_fail
+echo   [!] Tor did not get ready.
+choice /c YN /n /m "   Continue direct? [Y/N]: "
+if errorlevel 2 goto :menu_loop
+goto :run_noproxy
+
+REM - free proxy egress
+REM v2.22: [2] Continue used to pick a brand-new free proxy on each :run.
+REM With COLD=0 the proxy already in ACTIVE_PROXY is kept; a fresh start
+REM or an empty slot picks a new one.
+:run_free
+if "%COLD%"=="0" if defined ACTIVE_PROXY goto :run_free_keep
+:run_free_pick
+call :pick_free_proxy
+if errorlevel 1 goto :run_free_fail
+call :export_proxy_active
+goto :run_gate_ok
+:run_free_keep
+REM v2.22: a kept proxy is checked before it is reused - a dead one falls
+REM back to picking a new candidate instead of launching through a corpse.
+call :proxy_alive "%ACTIVE_PROXY%"
+if errorlevel 1 goto :run_free_pick
+call :export_proxy_active
+goto :run_gate_ok
+:run_free_fail
+echo   [!] no working free proxy found.
+choice /c YN /n /m "   Continue direct? [Y/N]: "
+if errorlevel 2 goto :menu_loop
 goto :run_noproxy
 
 REM Proxy is working: continue with the gate checks.
 :run_gate_ok
 REM the background service is the process that talks to the API: it
-REM must be born with the proxy env. if it was ever started direct
-REM (for example by hand before WARP existed), restart it once.
-REM The svc_proxied marker records that the restart already happened.
-REM v1 has no shared service: skip the restart and the marker there.
+REM must be born with the proxy env.
+REM v2.22: the svc_proxied marker restarted it ONCE in the life of the
+REM machine, so a service first started direct kept the real IP after
+REM WARP/TOR/PROXY was chosen later. The restart now runs whenever the
+REM egress URL in use differs from the one it was last restarted on,
+REM which covers every mode and every proxy change.
+REM v1 has no shared service: skip the restart there.
 if not defined CAP_SERVICE goto :run_marked
-if not exist "%STATE_DIR%\svc_proxied" call "%OC_CMD%" service restart >nul 2>&1
-if exist "%STATE_DIR%\svc_proxied" goto :run_marked
-echo ok>"%STATE_DIR%\svc_proxied"
+if not defined ACTIVE_PROXY goto :run_marked
+if /i "%ACTIVE_PROXY%"=="%SVC_PROXIED%" goto :run_marked
+call "%OC_CMD%" service restart >nul 2>&1
+set "SVC_PROXIED=%ACTIVE_PROXY%"
 :run_marked
-REM Common path for launching with or without egress.
+REM v2.22: delete the obsolete marker once; nothing reads it anymore.
+if exist "%STATE_DIR%\svc_proxied" del /f /q "%STATE_DIR%\svc_proxied" >nul 2>&1
+REM v2.23: WARP/TOR/PROXY used to fall straight through into the clearing
+REM block below, which wiped the proxy that had just been exported and ran
+REM opencode on the real IP. Proxied runs jump over that block now.
+goto :run_launch
+
+REM - direct path: NONE, WARP without WARP, or "Continue direct?"
 :run_noproxy
+REM v2.22: NONE (and the no-WARP fallback) must be direct for the child
+REM too: a system-wide HTTP_PROXY used to leak into the "no proxy" mode.
+set "HTTP_PROXY="
+set "HTTPS_PROXY="
+set "no_proxy="
+set "ACTIVE_PROXY="
+REM v2.23: a v2 service born under a proxy keeps the old tunnel's sockets.
+REM Coming back to NONE restarts it once, then forgets the proxy it had.
+if not defined SVC_PROXIED goto :run_launch
+if defined CAP_SERVICE if defined OC_CMD call "%OC_CMD%" service restart >nul 2>&1
+set "SVC_PROXIED="
+
+REM Common launch path, proxied and direct runs alike (v2.23).
+:run_launch
 
 REM Remember the log size before launch, so the watcher and the quota
 REM check only read what this run writes.
@@ -822,14 +949,24 @@ set "RESUME="
 
 REM Start the watcher, open the TUI, and stop the watcher when it closes.
 call :watch_start
+set "EC="
 call :launch
+REM v2.22: the TUI exit code is taken right after the launch. :launch stores
+REM it in EC itself and the fallback read covers a build where it did not.
+REM The old capture sat after :watch_stop, whose taskkill overwrote
+REM errorlevel, so a crashed TUI was reported as a clean exit.
+if not defined EC set "EC=%errorlevel%"
 call :watch_stop
-REM Save the exit code of the TUI before anything else overwrites it.
-set "EC=%errorlevel%"
-REM the proxy belongs to the child process only: clear it so later
-REM direct fetches never inherit a proxy that may already be dead.
-set "HTTP_PROXY="
-set "HTTPS_PROXY="
+REM v2.22: restore the user's own proxy variables instead of deleting them.
+call :restore_env
+REM v2.22: the watcher can flag a dead proxy/tunnel while the TUI is open
+REM (WARP/TOR/PROXY). It never kills the TUI; the note is shown here.
+if not exist "%STATE_DIR%\proxy_warn.txt" goto :run_warn_done
+echo.
+echo   [!] the egress proxy stopped answering while OpenCode was open:
+echo       %STATE_DIR%\proxy_warn.txt
+del /f /q "%STATE_DIR%\proxy_warn.txt" >nul 2>&1
+:run_warn_done
 echo.
 
 REM the watcher firing outranks the exit code: a killed TUI exits
@@ -886,30 +1023,68 @@ if "%WHY%"=="stop" echo Reopening on a new egress.
 if "%WHY%"=="watcher" echo Fatal error caught by the watcher - switching egress.
 
 REM Non-WARP modes: pick a new free proxy or just resume on TOR/NONE.
-if /i "%EGRESS%"=="PROXY" (
-  echo   [proxy] picking a fresh free proxy before resume...
-  call :pick_free_proxy
-  if errorlevel 1 (
-    echo   [!] no working free proxy - back to menu.
-    pause
-    goto :menu_loop
-  )
-  set "RESUME=1"
-  set "COLD=0"
-  goto :resume_and_run
-)
-if /i "%EGRESS%"=="TOR" (
-  call :tor_gate
-  if not errorlevel 1 (
-    echo   [tor] resume on Tor.
-    set "RESUME=1"
-    set "COLD=0"
-    goto :resume_and_run
-  )
-  echo   [!] Tor did not get ready - back to menu.
-  pause
-  goto :menu_loop
-)
+REM NEW: PROXY used to pick the SAME first live proxy every time and loop
+REM forever. Now the proxy that just hit the limit is remembered (burned),
+REM skipped by the next pick, and the attempts are bounded.
+if /i "%EGRESS%"=="PROXY" goto :qr_proxy
+REM v2.22: TOR used to resume on the SAME circuit forever: a burned exit
+REM node hit the limit, the gate passed, and the resume met the same limit
+REM again with no way out. The circuit is now renewed for real (restart of
+REM the launcher-managed Tor) with a bounded attempt counter.
+if /i not "%EGRESS%"=="TOR" goto :qr_after_tor
+set /a TOR_TRIES+=1
+if %TOR_TRIES% GTR %ROTATE_TRIES_MAX% goto :tor_exhausted
+echo   [tor] renewing the circuit, attempt %TOR_TRIES% of %ROTATE_TRIES_MAX%...
+call :tor_rotate
+if errorlevel 1 goto :tor_rotate_fail
+call :tor_gate
+if errorlevel 1 goto :tor_rotate_fail
+echo   [tor] new circuit - resuming.
+set "RESUME=1"
+set "COLD=0"
+goto :resume_and_run
+:tor_rotate_fail
+echo   [!] Tor could not be renewed - back to menu.
+pause
+goto :menu_loop
+:tor_exhausted
+echo   [!] Tor could not get a usable circuit after %ROTATE_TRIES_MAX% attempts.
+echo       The exit node may be blocked: try a new identity in Tor, or
+echo       switch to [1] WARP. warp/tor notes: "%TOR_DIR%\tor.log"
+set /a TOR_TRIES=0
+pause
+goto :menu_loop
+:qr_proxy
+if defined ACTIVE_PROXY >>"%STATE_DIR%\proxy_burned.txt" echo %ACTIVE_PROXY%
+set /a PROXY_ROT+=1
+if %PROXY_ROT% GTR %PROXY_ROT_MAX% goto :proxy_exhausted
+echo   [proxy] %ACTIVE_PROXY% is burned - attempt %PROXY_ROT% of %PROXY_ROT_MAX%, picking another...
+echo   [proxy] picking a fresh free proxy before resume...
+call :pick_free_proxy
+if errorlevel 1 goto :proxy_exhausted
+set "RESUME=1"
+set "COLD=0"
+goto :resume_and_run
+:proxy_exhausted
+echo   [!] no free proxy is left that still works ^(they all hit the limit^).
+echo       Free proxies are shared by many people, so their limit is often used up.
+choice /c yn /n /m "   Switch to Tor and keep going? [Y/N]: "
+if errorlevel 2 goto :proxy_exhausted_menu
+set "EGRESS=TOR"
+set "WARP="
+set "TOR_TRIES=0"
+set "PROXY_ROT=0"
+set "ACTIVE_PROXY=http://127.0.0.1:%TOR_HTTP_PORT%"
+call :tor_gate
+if errorlevel 1 goto :tor_rotate_fail
+set "RESUME=1"
+set "COLD=0"
+goto :resume_and_run
+:proxy_exhausted_menu
+set "PROXY_ROT=0"
+pause
+goto :menu_loop
+:qr_after_tor
 if /i "%EGRESS%"=="NONE" goto :menu_loop
 if not defined WARP goto :menu_loop
 echo Getting a new IP before the next attempt...
@@ -923,6 +1098,7 @@ REM ROTATE_TRIES counts attempts; PROBE_TRIES counts IPs the probe rejected.
 :auto_rotate
 set /a ROTATE_TRIES=0
 set /a PROBE_TRIES=0
+set /a REG_DONE=0
 set "PBROKEN=0"
 REM rounds: full give-up-and-restart cycles left before the final pause
 set /a RR_LEFT=%ROTATE_ROUNDS%
@@ -931,10 +1107,15 @@ set /a ROTATE_TRIES+=1
 if %ROTATE_TRIES% GTR %ROTATE_TRIES_MAX% goto :rotate_fail
 REM Space the attempts out: a plain burst of "registration new" is what
 REM Cloudflare throttles. From the second attempt on, wait first.
-if %ROTATE_TRIES% GTR 1 (
+REM v2.22: the wait is keyed to REG_DONE (registrations already made in
+REM this round), not to ROTATE_TRIES. Both probe paths decrement
+REM ROTATE_TRIES, so the next pass came back as attempt 1, skipped the
+REM cooldown and fired two registrations back to back: the 429.
+if %REG_DONE% GTR 0 (
     echo [%ROTATE_TRIES%] cooling down %ROTATE_COOLDOWN%s...
     timeout /t %ROTATE_COOLDOWN% /nobreak >nul 2>&1
 )
+set /a REG_DONE+=1
 REM Drop the current WARP connection and its registration.
 echo [%ROTATE_TRIES%] dropping the old registration...
 call :reg_drop
@@ -968,6 +1149,9 @@ if not errorlevel 1 goto :rotate_good
 REM Classify the miss: only a limit-shaped answer marks the IP burned.
 REM Anything else is a broken probe (retired model id, auth, a CLI
 REM change), and no amount of IP rotation fixes that.
+REM v2.22: a probe session the CLI refuses is its own case and never
+REM counts as a burned IP.
+if /i "%PCLASS%"=="nosession" goto :probe_no_session
 if /i not "%PCLASS%"=="broken" goto :probe_miss_burned
 set /a PBROKEN+=1
 echo   [!] probe failed for a reason that is NOT a limit - attempt %PBROKEN% of %PROBE_BROKEN_MAX%. Last output:
@@ -1011,6 +1195,27 @@ call "%OC_CMD%" session delete %OC_PROBE_ID% >nul 2>&1
 pause
 goto :menu_loop
 
+REM v2.22 (defensive, unverified against real CLI behaviour): nothing here
+REM creates the fixed probe session, so a build that REFUSES an unknown
+REM "-s <id>" would fail the probe for every IP. That must never read as
+REM "all IPs burned": the probe is switched off for this session, the
+REM current IP is kept, and the reason is printed in plain text.
+:probe_no_session
+echo.
+echo   [!] the probe session "%OC_PROBE_ID%" does not exist and this
+echo       opencode build refused it. That is a probe problem, NOT a
+echo       burned IP - no rotation can fix it.
+echo   [i] the probe is off for this session: IPs are accepted on
+echo       WARP-trace proof only, and the resume's own limit check still
+echo       catches a burned one. To keep the probe, create the session by
+echo       hand once, or clear PROBE in the settings block.
+set "PROBE=0"
+set "PBROKEN=0"
+REM v2.23: the IP itself was fine, only the probe could not run. Rotating
+REM again burned a fresh Cloudflare registration for nothing; accept this
+REM IP and resume.
+goto :rotate_good
+
 REM A verified IP that passed the probe: save it, mark the resume, and resume the chat.
 :rotate_good
 echo [%ROTATE_TRIES%] IP %IPN% works.
@@ -1022,7 +1227,16 @@ set "COLD=0"
 REM the background service holds sockets from the old tunnel, and its env
 REM was captured before this rotation: restart it so the next TUI is born
 REM on this exit IP. this runs on every rotation, not once per machine.
-if defined CAP_SERVICE if defined OC_CMD call "%OC_CMD%" service restart >nul 2>&1
+REM v2.25: the restart used to run on the user's own env (the probe had just
+REM restored it), so the new service was born DIRECT and every later request
+REM left on the real IP. The WARP proxy env is exported around it now.
+if not defined CAP_SERVICE goto :rg_svc_done
+if not defined OC_CMD goto :rg_svc_done
+call :export_proxy
+call "%OC_CMD%" service restart >nul 2>&1
+call :restore_env
+if defined ACTIVE_PROXY set "SVC_PROXIED=%ACTIVE_PROXY%"
+:rg_svc_done
 goto :resume_and_run
 
 REM Not a usable IP yet (no answer, or WARP not on): try again.
@@ -1040,6 +1254,9 @@ set /a RR_LEFT-=1
 echo   [i] rotation failed - cooling down 60s, then %RR_LEFT% more round(s)...
 timeout /t 60 /nobreak >nul 2>&1
 set /a ROTATE_TRIES=0
+REM v2.22: a new round starts after a full 60 s wait, so the per-round
+REM cooldown counter starts from zero again.
+set /a REG_DONE=0
 goto :rotate_loop
 :rotate_pause
 REM never leave the probe session behind as the last session
@@ -1089,8 +1306,8 @@ if defined CAP_STANDALONE set "RARGS=-c --standalone"
 if "%RESUME_AUTO%"=="1" set "RARGS=%RARGS% --auto"
 call :resume_run %RARGS%
 set "REC=%errorlevel%"
-set "HTTP_PROXY="
-set "HTTPS_PROXY="
+REM v2.22: restore the user's own proxy variables instead of deleting them.
+call :restore_env
 REM 124 is the watchdog code: the resume was killed for taking too long.
 if "%REC%"=="124" (
     echo   [!] no answer in %RESUME_TIMEOUT%s - this exit IP is dead.
@@ -1111,6 +1328,11 @@ if defined FHIT goto :resume_fatal
 :resume_noscan
 if not "%REC%"=="0" goto :resume_fatal
 echo   chat resumed on the new IP.
+REM v2.23: a good resume clears the circuit counter. Without this TOR_TRIES
+REM accumulated for the whole session and four clean renewals in a row sent
+REM the fifth to the menu.
+set /a TOR_TRIES=0
+set "PROXY_ROT=0"
 goto :run
 REM The resume hit a limit: go back to the rotation with WHY=quota.
 :resume_fatal
@@ -1131,14 +1353,16 @@ if /i "%EGRESS%"=="TOR" (
   echo.
   if defined OURTOR (
     echo   Restarting the launcher-managed Tor for a new circuit...
-    call :tor_stop
-    call :tor_start_if_needed
-    call :tor_wait_up
-    echo   New circuit: Tor is serving on :%TOR_HTTP_PORT% again.
+    REM v2.22: one call does the whole renewal, log-aware on failure.
+    call :tor_rotate
+    if errorlevel 1 echo   [!] the new circuit did not come up - see "%TOR_DIR%\tor.log".
+    if not errorlevel 1 echo   New circuit: Tor is serving on :%TOR_HTTP_PORT% again.
     pause
     goto :menu_loop
   )
-  echo   TOR mode - restart Tor / Privoxy yourself for a new circuit.
+  REM v2.22: a Tor this launcher did not start cannot be renewed from here.
+  echo   TOR mode - this Tor was started outside the launcher.
+  echo   Restart it yourself for a new circuit, or pick [1] WARP / [4] NONE.
   echo   Current bridge: http://127.0.0.1:%TOR_HTTP_PORT%
   pause
   goto :menu_loop
@@ -1215,7 +1439,11 @@ REM PowerShell 5.1 REJECTS an empty -ArgumentList ("El argumento es NULL,
 REM ..."): a fresh start has no --continue, so the plain-exe branch must
 REM omit the parameter entirely when the list is empty.
 REM .cmd and .bat files are started through cmd.exe, others are started directly.
-"%PSX%" -NoProfile -Command "$exe=$env:OC_EXE; $a=@(); if($env:OC_FLAGS){ $a=([string]$env:OC_FLAGS) -split [char]32; $a=@($a | Where-Object { $_ }) }; $p=$null; if($exe -match '[.](cmd|bat)$'){ $p=Start-Process cmd.exe -ArgumentList (@('/c',$exe)+$a) -NoNewWindow -PassThru } elseif($a.Count){ $p=Start-Process $exe -ArgumentList @($a) -NoNewWindow -PassThru } else { $p=Start-Process $exe -NoNewWindow -PassThru }; if(-not $p){ exit 1 }; $null=$p.Handle; Set-Content -LiteralPath $env:OC_PIDF -Value $p.Id; [void]$p.WaitForExit(); if($p.ExitCode -ne $null){ exit $p.ExitCode }; exit 1"
+REM v2.25: the .cmd/.bat branch used to pass @('/c',$exe)+$a, which never
+REM quotes $exe: a path with a space ("C:\Users\John Smith\...") ran as
+REM "C:\Users\John" and died. The whole line is now one string, wrapped in
+REM the extra quote pair that /s strips, with the exe quoted inside it.
+"%PSX%" -NoProfile -Command "$exe=$env:OC_EXE; $a=@(); if($env:OC_FLAGS){ $a=([string]$env:OC_FLAGS) -split [char]32; $a=@($a | Where-Object { $_ }) }; $p=$null; if($exe -match '[.](cmd|bat)$'){ $q=[char]34; $cl='/s /c '+$q+$q+$exe+$q; foreach($x in $a){ $cl+=' '+$x }; $cl+=$q; $p=Start-Process cmd.exe -ArgumentList $cl -NoNewWindow -PassThru } elseif($a.Count){ $p=Start-Process $exe -ArgumentList @($a) -NoNewWindow -PassThru } else { $p=Start-Process $exe -NoNewWindow -PassThru }; if(-not $p){ exit 1 }; $null=$p.Handle; Set-Content -LiteralPath $env:OC_PIDF -Value $p.Id; [void]$p.WaitForExit(); if($p.ExitCode -ne $null){ exit $p.ExitCode }; exit 1"
 set "EC=%errorlevel%"
 goto :eof
 
@@ -1234,7 +1462,7 @@ set "OC_ERRF=%STATE_DIR%\resume.err"
 set "OC_TO=%RESUME_TIMEOUT%"
 if exist "%OC_OUTF%" del /f /q "%OC_OUTF%" >nul 2>&1
 if exist "%OC_ERRF%" del /f /q "%OC_ERRF%" >nul 2>&1
-"%PSX%" -NoProfile -Command "$exe=$env:OC_EXE; $a=@('run'); if($env:OC_FL){ $a+=@($env:OC_FL -split [char]32 | Where-Object { $_ }) }; if($env:OC_MSG){ $a+=([char]34 + $env:OC_MSG + [char]34) }; $a=@($a | Where-Object { $_ }); $o=$env:OC_OUTF; $e=$env:OC_ERRF; if($exe -match '[.](cmd|bat)$'){ $p=Start-Process cmd.exe -ArgumentList (@('/c',$exe)+$a) -NoNewWindow -PassThru -RedirectStandardOutput $o -RedirectStandardError $e } else { $p=Start-Process $exe -ArgumentList $a -NoNewWindow -PassThru -RedirectStandardOutput $o -RedirectStandardError $e }; if(-not $p){ exit 1 }; $null=$p.Handle; if(-not $p.WaitForExit([int]$env:OC_TO*1000)){ Start-Process taskkill.exe -ArgumentList @('/T','/F','/PID',$p.Id) -WindowStyle Hidden -Wait; exit 124 }; exit $p.ExitCode"
+"%PSX%" -NoProfile -Command "$exe=$env:OC_EXE; $a=@('run'); if($env:OC_FL){ $a+=@($env:OC_FL -split [char]32 | Where-Object { $_ }) }; if($env:OC_MSG){ $a+=([char]34 + $env:OC_MSG + [char]34) }; $a=@($a | Where-Object { $_ }); $o=$env:OC_OUTF; $e=$env:OC_ERRF; if($exe -match '[.](cmd|bat)$'){ $q=[char]34; $cl='/s /c '+$q+$q+$exe+$q; foreach($x in $a){ $cl+=' '+$x }; $cl+=$q; $p=Start-Process cmd.exe -ArgumentList $cl -NoNewWindow -PassThru -RedirectStandardOutput $o -RedirectStandardError $e } else { $p=Start-Process $exe -ArgumentList $a -NoNewWindow -PassThru -RedirectStandardOutput $o -RedirectStandardError $e }; if(-not $p){ exit 1 }; $null=$p.Handle; if(-not $p.WaitForExit([int]$env:OC_TO*1000)){ Start-Process taskkill.exe -ArgumentList @('/T','/F','/PID',$p.Id) -WindowStyle Hidden -Wait; exit 124 }; exit $p.ExitCode"
 exit /b %errorlevel%
 
 REM - print what the resume actually said
@@ -1264,6 +1492,9 @@ if not "%WATCH%"=="1" goto :eof
 REM Clear leftovers from a previous run (also in modes that do not watch).
 if exist "%STATE_DIR%\watch_hit.txt" del /f /q "%STATE_DIR%\watch_hit.txt" >nul 2>&1
 if exist "%STATE_DIR%\watch.pid" del /f /q "%STATE_DIR%\watch.pid" >nul 2>&1
+REM v2.22: the egress watchdog writes here, and the launcher reads it back
+REM after the TUI closes.
+if exist "%STATE_DIR%\proxy_warn.txt" del /f /q "%STATE_DIR%\proxy_warn.txt" >nul 2>&1
 if /i "%EGRESS%"=="NONE" goto :eof
 if /i "%EGRESS%"=="WARP" if not defined WARP goto :eof
 REM Paths and settings passed to the watcher through the environment.
@@ -1273,12 +1504,20 @@ set "OC_HITF=%STATE_DIR%\watch_hit.txt"
 set "OC_LOGF=%LOGFILE%"
 set "OC_OFF=%SIZE_BEFORE%"
 set "OC_FATPAT=%OC_PAT%"
+REM v2.22: proxy watchdog target (host:port). The watcher polls it every
+REM minute and warns when the egress dies with the TUI open. It never kills
+REM the TUI: a dead proxy is a warning, not a verdict on the session.
+set "OC_WATCHP="
+set "OC_PWARNF=%STATE_DIR%\proxy_warn.txt"
+if /i "%EGRESS%"=="WARP" set "OC_WATCHP=127.0.0.1:%PROXY_PORT%"
+if /i "%EGRESS%"=="TOR" set "OC_WATCHP=127.0.0.1:%TOR_HTTP_PORT%"
+if /i "%EGRESS%"=="PROXY" if defined ACTIVE_PROXY set "OC_WATCHP=%ACTIVE_PROXY%"
 REM Watcher body (PowerShell, one line). Its steps in order:
 REM  1) save its own PID, 2) wait up to 60 s for the TUI PID,
 REM  3) loop every 2 s: read new log bytes, look for a fatal pattern,
 REM     re-read after 4 s, ignore it if INFO or DEBUG lines followed,
 REM     otherwise write the hit marker and kill the TUI process tree.
-start "" /b "%PSX%" -NoProfile -Command "$PID | Set-Content -LiteralPath $env:OC_WPIDF; $tpid=0; $off=0; if($env:OC_OFF){$off=[int64]$env:OC_OFF}; $dl=(Get-Date).AddSeconds(60); while($tpid -eq 0){ if((Get-Date) -gt $dl){exit 0}; if(Test-Path -LiteralPath $env:OC_TPIDF){ $c=(Get-Content -LiteralPath $env:OC_TPIDF -ErrorAction SilentlyContinue | Select-Object -First 1); if($c){$tpid=[int]$c} }; if($tpid -eq 0){Start-Sleep -Seconds 1} }; while($true){ Start-Sleep -Seconds 2; $p=Get-Process -Id $tpid -ErrorAction SilentlyContinue; if(-not $p){exit 0}; $t=''; try{ $fs=[IO.File]::Open($env:OC_LOGF,'Open','Read','ReadWrite'); if($fs.Length -lt $off){$off=0}; if($fs.Length -gt $off){ [void]$fs.Seek($off,'Begin'); $sr=New-Object IO.StreamReader($fs); $t=$sr.ReadToEnd(); $off=$fs.Length; $sr.Close() } else { $fs.Close() } }catch{ continue }; if(-not ($t -match $env:OC_FATPAT)){ continue }; Start-Sleep -Seconds 4; $t2=''; try{ $fs2=[IO.File]::Open($env:OC_LOGF,'Open','Read','ReadWrite'); if($fs2.Length -gt $off){ [void]$fs2.Seek($off,'Begin'); $sr2=New-Object IO.StreamReader($fs2); $t2=$sr2.ReadToEnd(); $off=$fs2.Length; $sr2.Close() } else { $fs2.Close() } }catch{}; $lines=($t+$t2) -split [char]10; $idx=-1; for($i=0;$i -lt $lines.Count;$i++){ if($lines[$i] -match $env:OC_FATPAT){$idx=$i} }; $rec=$false; if($idx -ge 0){ for($j=$idx+1;$j -lt $lines.Count;$j++){ if($lines[$j] -match 'level=(INFO|DEBUG)'){$rec=$true} } }; if($rec){ continue }; $p2=Get-Process -Id $tpid -ErrorAction SilentlyContinue; if($p2){ try{Set-Content -LiteralPath $env:OC_HITF -Value 'HIT'}catch{}; Start-Process taskkill.exe -ArgumentList @('/T','/F','/PID',$tpid) -WindowStyle Hidden -Wait; exit 1 } }"     
+start "" /b "%PSX%" -NoProfile -Command "$PID | Set-Content -LiteralPath $env:OC_WPIDF; $tpid=0; $off=0; $tick=0; $pfail=0; if($env:OC_OFF){$off=[int64]$env:OC_OFF}; $dl=(Get-Date).AddSeconds(60); while($tpid -eq 0){ if((Get-Date) -gt $dl){exit 0}; if(Test-Path -LiteralPath $env:OC_TPIDF){ $c=(Get-Content -LiteralPath $env:OC_TPIDF -ErrorAction SilentlyContinue | Select-Object -First 1); if($c){$tpid=[int]$c} }; if($tpid -eq 0){Start-Sleep -Seconds 1} }; while($true){ Start-Sleep -Seconds 2; $p=Get-Process -Id $tpid -ErrorAction SilentlyContinue; if(-not $p){exit 0}; $tick++; if($tick -ge 30){ $tick=0; if($env:OC_WATCHP){ try{ $hp=($env:OC_WATCHP -replace '^[A-Za-z0-9]+://',''); $ix=$hp.LastIndexOf([char]58); $ph=$hp.Substring(0,$ix); $pp=[int]$hp.Substring($ix+1); $c=New-Object Net.Sockets.TcpClient; $ar=$c.BeginConnect($ph,$pp,$null,$null); if($ar.AsyncWaitHandle.WaitOne(2500)){ $c.EndConnect($ar); $c.Close(); $pfail=0 } else { $pfail++ } }catch{ try{$c.Close()}catch{}; $pfail++ }; if($pfail -ge 3){ try{ Set-Content -LiteralPath $env:OC_PWARNF -Value ('egress proxy stopped answering: ' + $env:OC_WATCHP) }catch{}; $pfail=0 } } }; $t=''; try{ $fs=[IO.File]::Open($env:OC_LOGF,'Open','Read','ReadWrite'); if($fs.Length -lt $off){$off=0}; if($fs.Length -gt $off){ [void]$fs.Seek($off,'Begin'); $sr=New-Object IO.StreamReader($fs); $t=$sr.ReadToEnd(); $off=$fs.Length; $sr.Close() } else { $fs.Close() } }catch{ continue }; if(-not ($t -match $env:OC_FATPAT)){ continue }; Start-Sleep -Seconds 4; $t2=''; try{ $fs2=[IO.File]::Open($env:OC_LOGF,'Open','Read','ReadWrite'); if($fs2.Length -gt $off){ [void]$fs2.Seek($off,'Begin'); $sr2=New-Object IO.StreamReader($fs2); $t2=$sr2.ReadToEnd(); $off=$fs2.Length; $sr2.Close() } else { $fs2.Close() } }catch{}; $lines=($t+$t2) -split [char]10; $idx=-1; for($i=0;$i -lt $lines.Count;$i++){ if($lines[$i] -match $env:OC_FATPAT){$idx=$i} }; $rec=$false; if($idx -ge 0){ for($j=$idx+1;$j -lt $lines.Count;$j++){ if($lines[$j] -match 'level=(INFO|DEBUG)'){$rec=$true} } }; if($rec){ continue }; $p2=Get-Process -Id $tpid -ErrorAction SilentlyContinue; if($p2){ try{Set-Content -LiteralPath $env:OC_HITF -Value 'HIT'}catch{}; Start-Process taskkill.exe -ArgumentList @('/T','/F','/PID',$tpid) -WindowStyle Hidden -Wait; exit 1 } }"     
 goto :eof
 
 REM Stop the watcher and remove the PID files once the TUI has closed.
@@ -1332,8 +1571,8 @@ set "PZB="
 for %%S in ("%LOGFILE%") do if not "%%~zS"=="" set "PZB=%%~zS"
 call "%OC_CMD%" %PARGS% "reply with just: ok" >"%POUTF%" 2>"%PERRF%"
 set "PEC=%errorlevel%"
-set "HTTP_PROXY="
-set "HTTPS_PROXY="
+REM v2.23: restore the user's own proxy variables instead of deleting them.
+call :restore_env
 if not "%PEC%"=="0" goto :probe_classify
 REM The CLI exited clean, but a limit answer can still reach the log a
 REM moment later (flush race). Settle once, then judge only what arrived:
@@ -1351,8 +1590,13 @@ REM Failure: decide whether it was a limit error or a broken probe.
 set "PBURNED="
 if exist "%PERRF%" findstr /i /c:"free usage limit" /c:"usage limit reached" /c:"out of usage" /c:"insufficient credits" /c:"payment required" /c:"rate limit" "%PERRF%" >nul 2>&1 && set "PBURNED=1"
 if not defined PBURNED if exist "%POUTF%" findstr /i /c:"free usage limit" /c:"usage limit reached" /c:"out of usage" /c:"insufficient credits" /c:"payment required" /c:"rate limit" "%POUTF%" >nul 2>&1 && set "PBURNED=1"
+REM v2.22 (defensive): a CLI that refuses the fixed probe session says so
+REM in its own words. Catch that shape before the miss is filed as a
+REM "broken probe", so the rotation loop can report it as what it is.
+if not defined PBURNED if exist "%PERRF%" findstr /i /c:"session not found" /c:"no such session" /c:"session does not exist" /c:"unknown session" "%PERRF%" >nul 2>&1 && set "PCLASS=nosession"
+if not defined PBURNED if exist "%POUTF%" findstr /i /c:"session not found" /c:"no such session" /c:"session does not exist" /c:"unknown session" "%POUTF%" >nul 2>&1 && set "PCLASS=nosession"
 :probe_bad
-if not defined PBURNED set "PCLASS=broken"
+if not defined PBURNED if /i not "%PCLASS%"=="nosession" set "PCLASS=broken"
 REM Delete the probe session on both paths, so it never lingers as the
 REM newest session while the hunt keeps going.
 call "%OC_CMD%" session delete %OC_PROBE_ID% >nul 2>&1
@@ -1430,11 +1674,16 @@ set "OC_ARGS=--accept-tos %WCMD%"
 set "OC_LOG=%STATE_DIR%\wcli.log"
 set "OC_TO=%WARP_CALL_TIMEOUT%"
 set "OC_RRF=%STATE_DIR%\wcli_out.txt"
-"%PSX%" -NoProfile -Command "$o=$env:OC_RRF; $p=Start-Process -FilePath $env:OC_EXE -ArgumentList $env:OC_ARGS -NoNewWindow -PassThru -RedirectStandardOutput $o -RedirectStandardError ($o+'.err'); if(-not $p){ exit 1 }; $null=$p.Handle; if(-not $p.WaitForExit([int]$env:OC_TO*1000)){ try{$p.Kill()}catch{}; try{Add-Content -LiteralPath $env:OC_LOG -Value (((Get-Date -Format o)+' TIMEOUT: '+$env:OC_ARGS))}catch{}; exit 1 }; if($p.ExitCode -eq $null){ exit 1 }; $rc=$p.ExitCode; if($rc -ne 0){ $why=''; foreach($f in @($o,($o+'.err'))){ if(Test-Path -LiteralPath $f){ $l=@(Get-Content -LiteralPath $f -ErrorAction SilentlyContinue | Where-Object { $_ }); if($l.Count){ $why=$l[$l.Count-1]; break } } }; $line=((Get-Date -Format o)+' exit '+$rc+': '+$env:OC_ARGS); if($why){ $line=$line+' :: '+$why }; try{Add-Content -LiteralPath $env:OC_LOG -Value $line}catch{}; exit $rc }; exit 0" >nul 2>&1
+REM v2.22: WCLI_QUIET=1 silences one call (no console line, no wcli.log
+REM entry). Used by the registration poll in :reg_drop, where a failure is
+REM the expected answer and used to fill wcli.log with noise.
+set "OC_QUIET="
+if defined WCLI_QUIET set "OC_QUIET=1"
+"%PSX%" -NoProfile -Command "$o=$env:OC_RRF; $p=Start-Process -FilePath $env:OC_EXE -ArgumentList $env:OC_ARGS -NoNewWindow -PassThru -RedirectStandardOutput $o -RedirectStandardError ($o+'.err'); if(-not $p){ exit 1 }; $null=$p.Handle; if(-not $p.WaitForExit([int]$env:OC_TO*1000)){ try{$p.Kill()}catch{}; try{Add-Content -LiteralPath $env:OC_LOG -Value (((Get-Date -Format o)+' TIMEOUT: '+$env:OC_ARGS))}catch{}; exit 1 }; if($p.ExitCode -eq $null){ exit 1 }; $rc=$p.ExitCode; if($rc -ne 0){ $why=''; foreach($f in @($o,($o+'.err'))){ if(Test-Path -LiteralPath $f){ $l=@(Get-Content -LiteralPath $f -ErrorAction SilentlyContinue | Where-Object { $_ }); if($l.Count){ $why=$l[$l.Count-1]; break } } }; $line=((Get-Date -Format o)+' exit '+$rc+': '+$env:OC_ARGS); if($why){ $line=$line+' :: '+$why }; if(-not $env:OC_QUIET){ try{Add-Content -LiteralPath $env:OC_LOG -Value $line}catch{} }; exit $rc }; exit 0" >nul 2>&1
 if exist "%OC_RRF%" del /f /q "%OC_RRF%" >nul 2>&1
 if exist "%OC_RRF%.err" del /f /q "%OC_RRF%.err" >nul 2>&1
 set "WCLIRC=%errorlevel%"
-if not "%WCLIRC%"=="0" echo   [wcli] "%WCMD%" failed - see wcli.log
+if not "%WCLIRC%"=="0" if not defined WCLI_QUIET echo   [wcli] "%WCMD%" failed - see wcli.log
 exit /b %WCLIRC%
 
 REM - install WARP (UAC once)
@@ -1523,7 +1772,11 @@ echo   ERROR: opencode could not be installed on 32-bit Windows.
 echo          Install 32-bit node.js by hand from nodejs.org, then run:
 echo          npm i -g opencode-ai
 pause
-goto :quit
+REM v2.22: :standalone runs inside "call :install_opencode". A "goto :quit"
+REM from here jumped out of the call, ran :quit and then returned into the
+REM caller anyway. Raise a flag and return; the top-level caller exits.
+set "OC_ABORT=1"
+goto :eof
 
 REM Download the standalone zip from the latest GitHub release.
 :sa_ok
@@ -1584,14 +1837,26 @@ if "%HAVE%"=="0" (
 )
 echo   [auto-install] official channel (winget): SST.opencode...
 call :olog "winget channel: SST.opencode start"
-set "IWC=0"
-for /f "usebackq delims=" %%v in (`winget --version 2^>nul`) do set "IWC=%%v"
-if not defined IWC (
-    call :olog "winget exists but --version gave nothing - treating as broken"
+REM v2.22: the old probe was dead code ("set IWC=0" left the variable
+REM defined, so "if not defined" never fired, and the timeout branch
+REM tested for a value the loop could never produce) and "winget --version"
+REM had no time limit at all. Bounded now, and read from a file.
+set "IWC="
+set "IWVF=%TEMP%\oc_winget_%RANDOM%%RANDOM%.txt"
+set "OC_WGF=%IWVF%"
+set "OC_WGTO=20"
+if exist "%IWVF%" del /f /q "%IWVF%" >nul 2>&1
+"%PSX%" -NoProfile -Command "$o=$env:OC_WGF; $to=[int]$env:OC_WGTO*1000; $p=Start-Process winget.exe -ArgumentList @('--version') -NoNewWindow -PassThru -RedirectStandardOutput $o -RedirectStandardError ($o+'.err'); if(-not $p){ exit 1 }; $null=$p.Handle; if(-not $p.WaitForExit($to)){ Start-Process taskkill.exe -ArgumentList @('/T','/F','/PID',$p.Id) -WindowStyle Hidden -Wait; exit 124 }; exit 0" >nul 2>&1
+set "IWRC=%errorlevel%"
+if exist "%IWVF%" for /f "usebackq delims=" %%v in ("%IWVF%") do if not defined IWC set "IWC=%%v"
+if exist "%IWVF%" del /f /q "%IWVF%" >nul 2>&1
+if exist "%IWVF%.err" del /f /q "%IWVF%.err" >nul 2>&1
+if "%IWRC%"=="124" (
+    call :olog "winget --version blocked (timeout, code 124)"
     goto :iow_eof
 )
-if "%IWC%"=="1" (
-    call :olog "winget --version blocked (timeout, code 124)"
+if not defined IWC (
+    call :olog "winget exists but --version gave nothing - treating as broken"
     goto :iow_eof
 )
 "%PSX%" -NoProfile -Command "$p=Start-Process -FilePath winget.exe -ArgumentList @('install','--id','SST.opencode','--exact','--silent','--accept-package-agreements','--accept-source-agreements') -NoNewWindow -PassThru; if(-not $p){ exit 1 }; $null=$p.Handle; if(-not $p.WaitForExit(600000)){ Start-Process taskkill.exe -ArgumentList @('/T','/F','/PID',$p.Id) -WindowStyle Hidden -Wait; exit 124 }; exit $p.ExitCode" >nul 2>&1
@@ -1691,14 +1956,31 @@ REM are searched, so the ANSI/code-page noise in the help output is harmless.
 set "CAP_STANDALONE="
 set "CAP_SERVICE="
 if not defined OC_CMD goto :eof
+REM v2.22: 8 s was too short on a cold start, and empty output is
+REM indistinguishable from a v1 CLI. 15 s, plus one retry when neither
+REM marker was found.
+set "OC_DCR=0"
+:dc_run
 set "OC_VEXE=%OC_CMD%"
 set "OC_VF=%TEMP%\oc_caps_%RANDOM%%RANDOM%.txt"
-set "OC_VTO=8"
+set "OC_VTO=15"
 if exist "%OC_VF%" del /f /q "%OC_VF%" >nul 2>&1
 "%PSX%" -NoProfile -Command "$exe=$env:OC_VEXE; $o=$env:OC_VF; $to=[int]$env:OC_VTO*1000; $line='call '+[char]34+$exe+[char]34+' --help 2>&1'; $p=Start-Process cmd.exe -ArgumentList @('/c',$line) -NoNewWindow -PassThru -RedirectStandardOutput $o; if($p){ $null=$p.Handle; if(-not $p.WaitForExit($to)){ Start-Process taskkill.exe -ArgumentList @('/T','/F','/PID',$p.Id) -WindowStyle Hidden -Wait } }" >nul 2>&1
-if not exist "%OC_VF%" goto :dc_eof
+if not exist "%OC_VF%" goto :dc_retry
 findstr /i /c:"--standalone" "%OC_VF%" >nul 2>&1 && set "CAP_STANDALONE=1"
+REM v2.25: OpenCode v2 prints the subcommand as "service    Manage the
+REM background server" and never the words "opencode service", so this flag
+REM was never set and every service restart/stop in the launcher was dead
+REM code. The legacy marker stays as a fallback.
 findstr /i /c:"opencode service" "%OC_VF%" >nul 2>&1 && set "CAP_SERVICE=1"
+if not defined CAP_SERVICE findstr /r /i /c:"^ *service  *Manage" "%OC_VF%" >nul 2>&1 && set "CAP_SERVICE=1"
+if defined CAP_STANDALONE goto :dc_eof
+if defined CAP_SERVICE goto :dc_eof
+:dc_retry
+if "%OC_DCR%"=="1" goto :dc_eof
+set "OC_DCR=1"
+if exist "%OC_VF%" del /f /q "%OC_VF%" >nul 2>&1
+goto :dc_run
 :dc_eof
 if exist "%OC_VF%" del /f /q "%OC_VF%" >nul 2>&1
 goto :eof
@@ -1778,18 +2060,35 @@ REM used to hang the launcher right after "Working in:" with no output.
 :oc_version
 call :trace oc_version
 set "CVER="
+REM v2.22: 3 s was too short on a cold start (antivirus scanning the exe),
+REM and an empty answer made the launcher treat a v2 binary as v1. 10 s,
+REM plus one retry when nothing came back.
+set "OC_VR=0"
+:oc_ver_run
 set "OC_VF=%TEMP%\oc_ver_%RANDOM%%RANDOM%.txt"
 set "OC_VEXE=%OC_CAN%"
-set "OC_VTO=3"
+set "OC_VTO=10"
 if exist "%OC_VF%" del /f /q "%OC_VF%" >nul 2>&1
 "%PSX%" -NoProfile -Command "$exe=$env:OC_VEXE; $o=$env:OC_VF; $to=[int]$env:OC_VTO*1000; $line='call ' + [char]34 + $exe + [char]34 + ' --version 2>nul <nul'; $p=Start-Process cmd.exe -ArgumentList @('/c',$line) -NoNewWindow -PassThru -RedirectStandardOutput $o; if(-not $p){ exit 1 }; $null=$p.Handle; if(-not $p.WaitForExit($to)){ Start-Process taskkill.exe -ArgumentList @('/T','/F','/PID',$p.Id) -WindowStyle Hidden -Wait; exit 124 }; exit 0" >nul 2>&1
-if not exist "%OC_VF%" goto :eof
+set "OC_VRC=%errorlevel%"
 set "VLINE="
-set /p VLINE=<"%OC_VF%"
-del /f /q "%OC_VF%" >nul 2>&1
-if not defined VLINE goto :eof
+if exist "%OC_VF%" set /p VLINE=<"%OC_VF%"
+if defined VLINE goto :oc_ver_read
+REM v2.23: retry only after a TIMEOUT (124). A binary that answered and
+REM printed nothing is a normal v1 answer; retrying it cost another 10 s
+REM per candidate for nothing.
+if not "%OC_VRC%"=="124" goto :oc_ver_eof
+if "%OC_VR%"=="1" goto :oc_ver_eof
+set "OC_VR=1"
+if exist "%OC_VF%" del /f /q "%OC_VF%" >nul 2>&1
+goto :oc_ver_run
+:oc_ver_read
+if exist "%OC_VF%" del /f /q "%OC_VF%" >nul 2>&1
 for /f "tokens=2" %%v in ("%VLINE%") do if not defined CVER set "CVER=%%v"
 if not defined CVER for /f "tokens=1" %%v in ("%VLINE%") do if not defined CVER set "CVER=%%v"
+:oc_ver_eof
+if exist "%OC_VF%" del /f /q "%OC_VF%" >nul 2>&1
+REM v2.23: no second run for an unparsable line either - only a timeout.
 goto :eof
 
 REM - numeric version compare
@@ -1803,17 +2102,25 @@ set "VA=%VA:v=%"
 set "VB=%VB:v=%"
 set "A1=0"
 set "A2=0"
+set "A3=0"
 set "B1=0"
 set "B2=0"
-for /f "tokens=1,2 delims=." %%a in ("%VA%") do (set "A1=%%a" & set "A2=%%b")
-for /f "tokens=1,2 delims=." %%a in ("%VB%") do (set "B1=%%a" & set "B2=%%b")
+set "B3=0"
+REM v2.22: the third component (patch) is compared too. v2.21 stopped at
+REM minor, so 2.2.1 and 2.2.9 ranked equal.
+for /f "tokens=1,2,3 delims=." %%a in ("%VA%") do (set "A1=%%a" & set "A2=%%b" & set "A3=%%c")
+for /f "tokens=1,2,3 delims=." %%a in ("%VB%") do (set "B1=%%a" & set "B2=%%b" & set "B3=%%c")
 call :vnum A1
 call :vnum A2
+call :vnum A3
 call :vnum B1
 call :vnum B2
+call :vnum B3
 if %A1% GTR %B1% goto :vg_new
 if %A1% LSS %B1% goto :eof
 if %A2% GTR %B2% goto :vg_new
+if %A2% LSS %B2% goto :eof
+if %A3% GTR %B3% goto :vg_new
 goto :eof
 :vg_new
 set "VGT=1"
@@ -1824,6 +2131,17 @@ REM usage: call :vnum NAME; anything that is not a number becomes 0.
 :vnum
 set "NV=%~1"
 call set "NRAW=%%%NV%%%"
+REM v2.25: set /a reads a leading 0 as octal, so "08" and "09" failed and
+REM ranked as 0. Leading zeros are stripped first.
+REM An undefined NRAW (a one-part version like "2") must never reach the
+REM substring syntax below: it is a syntax error in a batch file.
+:vn_z
+if not defined NRAW goto :vn_n
+if not "%NRAW:~0,1%"=="0" goto :vn_n
+if "%NRAW:~1%"=="" goto :vn_n
+set "NRAW=%NRAW:~1%"
+goto :vn_z
+:vn_n
 set "NN="
 set /a NN=NRAW 2>nul
 if not defined NN set "NN=0"
@@ -1883,6 +2201,9 @@ if errorlevel 2 goto :eof
 echo   [update] npm i -g opencode-ai@latest
 call npm i -g opencode-ai@latest
 if errorlevel 1 echo   [!] npm update failed - keeping the current version.
+REM v2.22: resolve the command again. OC_CMD could still point at an old
+REM standalone exe, so the version read below came from the wrong binary.
+call :find_opencode
 REM Re-read what the binary reports now and refresh the capability flags.
 set "OC_CAN=%OC_CMD%"
 call :oc_version
@@ -1963,7 +2284,12 @@ set /a RD_TRIES=0
 :rd_wait
 set /a RD_TRIES+=1
 if %RD_TRIES% GTR 6 goto :rd_go
+REM v2.22: this poll is EXPECTED to fail while the daemon tears the old
+REM registration down. Quiet mode keeps that normal probe out of the
+REM console and out of wcli.log.
+set "WCLI_QUIET=1"
 call :wcli registration show
+set "WCLI_QUIET="
 if errorlevel 1 goto :rd_go
 timeout /t 1 /nobreak >nul 2>&1
 goto :rd_wait
@@ -2002,11 +2328,19 @@ REM - one-stop gate for the TOR egress: 0 = usable, 1 = give up
 :tor_gate
 call :trace tor_gate
 call :tor_ready
-if not errorlevel 1 goto :tg_ok
+REM v2.24: a bridge that already answers short-circuits the gate. Recover
+REM ownership here too, or "Change IP" treats our own Tor as a foreign one.
+if not errorlevel 1 goto :tg_have
+REM v2.22: look for a Tor that is already running BEFORE downloading the
+REM portable bundle. The old order fetched the bundle even when a live Tor
+REM (service on 9050, Tor Browser on 9150) was sitting on its SOCKS port.
+call :tor_socks_up
+if not errorlevel 1 goto :tg_existing
 if not "%TOR_AUTO_INSTALL%"=="1" goto :tg_fail
 echo   [tor] nothing answering on :%TOR_HTTP_PORT% - portable setup starting...
 call :tor_install_if_missing
 if not defined TOR_EXE goto :tg_missing
+:tg_existing
 call :tor_start_if_needed
 if errorlevel 1 goto :tg_fail
 call :tor_wait_up
@@ -2022,6 +2356,11 @@ echo       https://dist.torproject.org/torbrowser/
 echo       unpack the tor-expert-bundle tar.gz into "%TOR_DIR%",
 echo       so that "%TOR_DIR%\Tor\tor.exe" exists, then run this again.
 exit /b 1
+REM v2.24: single place that records who owns the running Tor, whichever
+REM branch reached a ready state.
+:tg_have
+call :tor_own_running
+if not errorlevel 1 set "OURTOR=1"
 :tg_ok
 echo   [tor] ready: SOCKS :%TOR_SOCKS_PORT% - HTTP :%TOR_HTTP_PORT%.
 exit /b 0
@@ -2102,7 +2441,10 @@ tar.exe -xzf "%TGZ%" -C "%TOR_DIR%" >nul 2>&1
 if exist "%TGZ%" del /f /q "%TGZ%" >nul 2>&1
 call :tor_find_exe
 if defined TOR_EXE (
-  echo   [ok] Tor installed (portable) in "%TOR_DIR%".
+  REM v2.22: this echo used to contain a literal "(portable)". Inside an
+  REM if (...) block that closing parenthesis ended the block right there,
+  REM so the whole line was a syntax error at parse time.
+  echo   [ok] Tor installed - portable - in "%TOR_DIR%".
 ) else (
   echo   [!] the bundle unpacked but tor.exe was not found in "%TOR_DIR%".
 )
@@ -2119,7 +2461,12 @@ REM already answering is a working bridge (anyone's) and is used as it is.
 :tor_start_if_needed
 set "OURTOR="
 set "OURBRIDGE="
-call :port_up %TOR_SOCKS_PORT%
+REM v2.23: our own tor can still be alive after the bridge died. Recover
+REM ownership from tor.pid so :tor_rotate can restart it, instead of
+REM declaring it foreign and refusing to renew the circuit.
+call :tor_own_running
+if not errorlevel 1 set "OURTOR=1"
+call :tor_socks_up
 if errorlevel 1 goto :tsi_tor
 echo   [tor] a Tor is already running on :%TOR_SOCKS_PORT% - using it as it is.
 goto :tsi_bridge
@@ -2161,6 +2508,11 @@ set "OURTOR=1"
 :tsi_bridge
 call :port_up %TOR_HTTP_PORT%
 if not errorlevel 1 goto :tsi_done
+REM v2.25: with a Tor that was already running, nothing had created TOR_DIR
+REM yet, so the bridge could write neither bridge.log nor bridge.pid (it
+REM printed a DirectoryNotFound error) and :tor_stop could never find the
+REM bridge again: it kept running after the launcher exited.
+if not exist "%TOR_DIR%" mkdir "%TOR_DIR%" >nul 2>&1
 set "OC_BRPORT=%TOR_HTTP_PORT%"
 set "OC_BRSOCKS=%TOR_SOCKS_PORT%"
 set "OC_BRLOG=%TOR_DIR%\bridge.log"
@@ -2253,6 +2605,63 @@ set "OURTOR="
 set "OURBRIDGE="
 goto :eof
 
+REM - is a Tor SOCKS port answering? (v2.22)
+REM Checks TOR_SOCKS_PORT first, then Tor Browser's default (9150) and the
+REM tor service default (9050). When one of those answers, TOR_SOCKS_PORT
+REM is moved to it, so torrc and the bridge point at the live Tor.
+REM exit 0 = a usable SOCKS port exists, 1 = none.
+:tor_socks_up
+call :port_up %TOR_SOCKS_PORT%
+if not errorlevel 1 exit /b 0
+call :port_up 9150
+if not errorlevel 1 goto :tsu_9150
+call :port_up 9050
+if not errorlevel 1 goto :tsu_9050
+exit /b 1
+:tsu_9150
+echo   [tor] found a Tor Browser SOCKS on :9150 - using it.
+set "TOR_SOCKS_PORT=9150"
+exit /b 0
+:tsu_9050
+echo   [tor] found a Tor SOCKS on :9050 - using it.
+set "TOR_SOCKS_PORT=9050"
+exit /b 0
+
+REM - is the tor recorded in tor.pid ours and still running? (v2.23)
+REM Identity rule of :tor_stop: only a tor process whose image path sits
+REM inside TOR_DIR counts, whatever the pid file says.
+REM exit 0 = ours and alive, 1 = not.
+:tor_own_running
+set "OC_TORPID=%TOR_DIR%\tor.pid"
+if not exist "%OC_TORPID%" exit /b 1
+set "OC_TORDIR=%TOR_DIR%"
+"%PSX%" -NoProfile -Command "$t=Get-Content -LiteralPath $env:OC_TORPID -ErrorAction SilentlyContinue | Select-Object -First 1; if(-not $t){ exit 1 }; try{ $p=Get-Process -Id ([int]$t) -ErrorAction Stop }catch{ exit 1 }; if($p.ProcessName -ne 'tor'){ exit 1 }; try{ $pd=$env:OC_TORDIR; if($p.Path -and (($p.Path -ieq $pd) -or ($p.Path -like ($pd+'\*')))){ exit 0 } }catch{}; exit 1" >nul 2>&1
+exit /b %errorlevel%
+
+REM - renew the Tor circuit (v2.22)
+REM Restarting the Tor the launcher started is a real circuit change: every
+REM new process builds new circuits from a new guard. A Tor the launcher
+REM did NOT start (Tor Browser, a tor service) is never touched. A NEWNYM
+REM over ControlPort is not used: the torrc here has no ControlPort.
+REM exit 0 = a live Tor answers again, 1 = cannot renew.
+:tor_rotate
+if not defined OURTOR goto :tr_foreign
+call :tor_stop
+call :tor_start_if_needed
+if errorlevel 1 goto :tr_fail
+call :tor_wait_up
+if errorlevel 1 goto :tr_fail
+call :tor_ready
+if errorlevel 1 goto :tr_fail
+exit /b 0
+:tr_foreign
+echo   [!] this Tor was not started by the launcher - it cannot be renewed
+echo       from here. Restart Tor Browser yourself, or pick [1] WARP / [4] NONE.
+exit /b 1
+:tr_fail
+call :tor_log_tail
+exit /b 1
+
 REM - exit IP + warp flag
 REM When WARP is on, an IP is reported only if the trace came back
 REM through the proxy AND says warp=on. a dead tunnel reports nothing,
@@ -2302,6 +2711,11 @@ if not exist "%TFILE%" goto :gip_done
 for /f "tokens=2 delims==" %%i in ('findstr /b "ip=" "%TFILE%"') do set "GIP=%%i"
 for /f "tokens=2 delims==" %%w in ('findstr /b "warp=" "%TFILE%"') do set "GFLAG=%%w"
 del /f /q "%TFILE%" >nul 2>&1
+REM v2.22: WARP+ accounts answer warp=plus, not warp=on. Both mean the
+REM trace came back THROUGH WARP, so plus is normalised to on here, at the
+REM single point every caller reads the flag from (:getip2, :ensure_new_ip,
+REM :rotate_loop, :rotate and the manual rotation all use this value).
+if /i "%GFLAG%"=="plus" set "GFLAG=on"
 :gip_done
 if not defined WARP goto :gip_store
 if not "%GFLAG%"=="on" set "GIP="
@@ -2352,6 +2766,11 @@ REM Save the IP as the last one used and show it.
 :remember_ip
 if defined CUR if /i "%CFLAG%"=="on" >"%STATE_DIR%\lastip.txt" echo %CUR%
 set "IP=%CUR%"
+REM v2.22: the header promises a service restart after every rotation and
+REM this path never did it, so the next TUI could inherit the old tunnel's
+REM sockets. v2 only: v1 has no shared service.
+if defined CAP_SERVICE if defined OC_CMD if defined ACTIVE_PROXY call "%OC_CMD%" service restart >nul 2>&1
+if defined ACTIVE_PROXY set "SVC_PROXIED=%ACTIVE_PROXY%"
 echo   exit IP: %CUR%
 goto :eof
 REM Limit reached without a new IP: continue with the current one.
@@ -2474,11 +2893,39 @@ goto :eof
 REM - cache and saved tokens
 REM Delete the opencode cache folder and the saved login file (auth.json).
 REM Chats in the database are not touched here.
+REM v2.22: auth.json is archived (copy, size check, delete) before it is
+REM removed, exactly like the database files. It used to be deleted with no
+REM copy, against what the header promises.
 :clear_tokens
 set "CACHE_DIR=%USERPROFILE%\.cache\opencode"
 if exist "%CACHE_DIR%" rmdir /s /q "%CACHE_DIR%" >nul 2>&1
-if exist "%DATA_DIR%\auth.json" del /f /q "%DATA_DIR%\auth.json" >nul 2>&1
+if exist "%DATA_DIR%\auth.json" call :archive_auth
 echo   cache and tokens cleared.
+goto :eof
+
+REM - archive auth.json into this reset's folder, verify, then delete
+:archive_auth
+if not defined TARGET goto :aa_nodir
+if not exist "%TARGET%" mkdir "%TARGET%" >nul 2>&1
+copy /y "%DATA_DIR%\auth.json" "%TARGET%\auth.json" >nul 2>&1
+if errorlevel 1 goto :aa_fail
+set "SZS="
+set "SZD="
+for %%A in ("%DATA_DIR%\auth.json") do set "SZS=%%~zA"
+for %%A in ("%TARGET%\auth.json") do set "SZD=%%~zA"
+if not "%SZS%"=="%SZD%" goto :aa_bad
+del /f /q "%DATA_DIR%\auth.json" >nul 2>&1
+echo   auth.json archived in "%TARGET%".
+goto :eof
+:aa_bad
+del /f /q "%TARGET%\auth.json" >nul 2>&1
+echo   [!] the auth.json copy did not verify - tokens are left in place.
+goto :eof
+:aa_fail
+echo   [!] could not copy auth.json - tokens are left in place.
+goto :eof
+:aa_nodir
+echo   [!] no archive folder for this reset - auth.json is left in place.
 goto :eof
 
 REM - hand the WARP proxy to the child process only
@@ -2488,6 +2935,15 @@ REM Sets HTTP_PROXY, HTTPS_PROXY and no_proxy so that child processes use the pr
 if not defined WARP goto :eof
 call :proxy_ok
 if errorlevel 1 exit /b 1
+REM v2.23: OpenCode (Bun) does not speak SOCKS. When only the SOCKS5 side
+REM of the WARP port answers there is no proxy that can carry opencode, and
+REM exporting socks5h:// just made every request fail while looking fine.
+REM Report it and return 1 so the caller asks whether to go direct.
+if /i not "%PROXY_KIND%"=="socks" goto :ep_http
+echo   [!] the WARP port answers SOCKS5 only, and OpenCode cannot use SOCKS.
+echo       WARP is up, but no usable HTTP proxy can be handed to it.
+exit /b 1
+:ep_http
 set "HTTP_PROXY=%PROXY%"
 set "HTTPS_PROXY=%PROXY%"
 set "no_proxy=%NO_PROXY%"
@@ -2502,20 +2958,52 @@ set "no_proxy=%NO_PROXY%"
 echo   [proxy] process-only: %ACTIVE_PROXY%
 exit /b 0
 
+REM - put the user's own proxy variables back (v2.22)
+REM The launcher overwrites HTTP_PROXY / HTTPS_PROXY / no_proxy for the
+REM child tree. Before v2.22 it then emptied them, which deleted values
+REM that were already set system-wide or by the user's shell.
+:restore_env
+set "HTTP_PROXY=%OC_HP0%"
+set "HTTPS_PROXY=%OC_SP0%"
+set "no_proxy=%OC_NP0%"
+goto :eof
+
 REM - can the proxy actually carry an https request?
 REM With curl: try the HTTP proxy, then SOCKS5. Without curl: only check
 REM that the port accepts a TCP connection (the 1.5 second wait).
 :proxy_ok
+REM v2.22: PROXY_KIND records WHICH form answered: http, socks or tcp.
+REM :export_proxy needs it to hand opencode a URL that actually works.
+set "PROXY_KIND="
 if not "%HAVE_CURL%"=="1" goto :proxy_ok_tcp
 curl.exe -sS -o nul -f --max-time 6 --noproxy "" --proxy "%PROXY%" "%TRACE_URL%" >nul 2>&1
-if not errorlevel 1 exit /b 0
+if not errorlevel 1 goto :pok_http
 curl.exe -sS -o nul -f --max-time 6 --noproxy "" --proxy "%SOCKS_PROXY%" "%TRACE_URL%" >nul 2>&1
-if not errorlevel 1 exit /b 0
+if not errorlevel 1 goto :pok_socks
 exit /b 1
+:pok_http
+set "PROXY_KIND=http"
+exit /b 0
+:pok_socks
+set "PROXY_KIND=socks"
+exit /b 0
 
 REM TCP-only check, used when curl is missing.
 :proxy_ok_tcp
 "%PSX%" -NoProfile -Command "try{$c=New-Object Net.Sockets.TcpClient;$a=$c.BeginConnect('127.0.0.1',%PROXY_PORT%,$null,$null);if(-not $a.AsyncWaitHandle.WaitOne(1500)){exit 1};$c.EndConnect($a);$c.Close();exit 0}catch{exit 1}" >nul 2>&1
+if errorlevel 1 exit /b 1
+set "PROXY_KIND=tcp"
+exit /b 0
+
+REM - can this proxy URL still carry the trace request? (v2.22)
+REM usage: call :proxy_alive <url>  -> errorlevel 0 when it answers.
+REM Without curl there is nothing to test with: reported alive and left to
+REM the gate, which is the old behaviour.
+:proxy_alive
+if not "%HAVE_CURL%"=="1" exit /b 0
+set "OC_PA=%~1"
+if not defined OC_PA exit /b 1
+curl.exe -sS -o nul -f --max-time %PROXY_PROBE_TIMEOUT% --noproxy "" --proxy "%OC_PA%" "%TRACE_URL%" >nul 2>&1
 if errorlevel 1 exit /b 1
 exit /b 0
 
@@ -2532,6 +3020,9 @@ exit /b 0
 REM - download the free HTTP proxy list and pick the first that answers TRACE
 :pick_free_proxy
 set "ACTIVE_PROXY="
+REM v2.23: first candidate that passed the Cloudflare trace but not the
+REM (unverified) API check. Offered at the end instead of failing the mode.
+set "TRACE_ONLY="
 set "PLIST=%STATE_DIR%\proxy_list.txt"
 if exist "%PLIST%" del /f /q "%PLIST%" >nul 2>&1
 echo   [proxy] fetching free list...
@@ -2564,11 +3055,22 @@ for /f "usebackq delims=" %%p in ("%PLIST%") do (
   set "CAND=%%p"
   call :pfp_count
   if errorlevel 1 goto :pfp_fail
-  call :try_one_proxy
-  if not errorlevel 1 goto :pfp_ok
+  if not defined PSKIP call :try_one_proxy
+  if not defined PSKIP if not errorlevel 1 goto :pfp_ok
 )
 :pfp_fail
-exit /b 1
+REM v2.23: every candidate that reached Cloudflare was rejected by the
+REM second check, and that check depends on PROXY_API_CHECK_URL, which is
+REM not verified. Offer the first proxy that did pass the trace instead of
+REM killing PROXY mode outright.
+if not defined TRACE_ONLY exit /b 1
+echo   [!] no proxy passed the API check, but %TRACE_ONLY% did reach Cloudflare.
+echo       PROXY_API_CHECK_URL may be wrong - see the settings block.
+choice /c YN /n /m "   Use that proxy anyway? [Y/N]: "
+if errorlevel 2 exit /b 1
+set "ACTIVE_PROXY=%TRACE_ONLY%"
+echo   [proxy] live: %ACTIVE_PROXY%
+exit /b 0
 :pfp_ok
 exit /b 0
 
@@ -2577,9 +3079,16 @@ REM Called from the for body so the counter is not frozen by block expansion.
 REM Comment lines (# or ;) are list headers: they do not count toward the
 REM cap and never spend a probe (v2.21).
 :pfp_count
+set "PSKIP="
 set "C1=%CAND:~0,1%"
 if "%C1%"=="#" exit /b 0
 if "%C1%"==";" exit /b 0
+REM NEW: a proxy already burned is skipped and does not spend the try cap.
+if not exist "%STATE_DIR%\proxy_burned.txt" goto :pfc_count
+findstr /x /i /c:"%CAND%" "%STATE_DIR%\proxy_burned.txt" >nul 2>&1 && set "PSKIP=1"
+findstr /x /i /c:"http://%CAND%" "%STATE_DIR%\proxy_burned.txt" >nul 2>&1 && set "PSKIP=1"
+if defined PSKIP exit /b 0
+:pfc_count
 set /a PTRY+=1
 if %PTRY% GTR %PROXY_TRY_MAX% exit /b 1
 exit /b 0
@@ -2599,6 +3108,16 @@ if not errorlevel 1 exit /b 1
 if not "%HAVE_CURL%"=="1" exit /b 1
 curl.exe -sS -o nul -f --max-time %PROXY_PROBE_TIMEOUT% --noproxy "" --proxy "%C%" "%TRACE_URL%" >nul 2>&1
 if errorlevel 1 exit /b 1
+REM v2.23: remember the first candidate that cleared the trace, in case the
+REM API check rejects everything.
+if not defined TRACE_ONLY set "TRACE_ONLY=%C%"
+REM v2.22: the Cloudflare trace only proves the proxy reaches Cloudflare.
+REM Check the API host opencode actually calls before accepting it. No -f,
+REM so any HTTP status counts: only an unreachable route fails here.
+if not "%PROXY_API_CHECK%"=="1" goto :top_ok
+curl.exe -sS -o nul --max-time %PROXY_PROBE_TIMEOUT% --noproxy "" --proxy "%C%" "%PROXY_API_CHECK_URL%" >nul 2>&1
+if errorlevel 1 exit /b 1
+:top_ok
 set "ACTIVE_PROXY=%C%"
 echo   [proxy] live: %ACTIVE_PROXY%
 exit /b 0
@@ -2607,29 +3126,54 @@ REM - one launcher at a time
 REM The lock is a folder: creating it succeeds only for the first launcher.
 REM A lock older than 2 hours is treated as stale and removed. A newer lock
 REM triggers a question: continue anyway, or exit.
+REM v2.22: staleness now reads the newest of the folder timestamp, the
+REM stamp file inside it, and a live TUI pid. Rewriting a file inside a
+REM folder does not bump the folder mtime on NTFS, and nothing refreshed
+REM it while the TUI ran, so a live launcher looked 2 h old mid-session.
 :lock_check
 set "LOCKDIR=%STATE_DIR%\lock"
 md "%LOCKDIR%" >nul 2>&1
-if not errorlevel 1 goto :eof
+if not errorlevel 1 goto :lk_take
 set "OC_LOCK=%LOCKDIR%"
-REM Remove the lock if it is older than 2 hours (exit 0 means stale and removed).
-"%PSX%" -NoProfile -Command "try{$i=Get-Item -LiteralPath $env:OC_LOCK -Force;if(((Get-Date)-$i.LastWriteTime).TotalHours -gt 2){Remove-Item -LiteralPath $env:OC_LOCK -Recurse -Force;exit 0}else{exit 1}}catch{exit 0}" >nul 2>&1
-if not errorlevel 1 goto :lock_retry
+set "OC_LTPID=%STATE_DIR%\tui.pid"
+REM v2.25: closing the window with X skips :quit and used to leave a lock
+REM that blocked the next start with "Another launcher seems to be running"
+REM for up to 2 hours. The lock now records the cmd.exe that took it (file
+REM "owner"); an owner that is gone is a stale lock whatever its age.
+"%PSX%" -NoProfile -Command "try{ $of=Join-Path $env:OC_LOCK 'owner'; if(Test-Path -LiteralPath $of){ $o=(Get-Content -LiteralPath $of -ErrorAction SilentlyContinue | Select-Object -First 1); $alive=$false; if($o){ $pr=Get-Process -Id ([int]$o) -ErrorAction SilentlyContinue; if($pr -and $pr.ProcessName -eq 'cmd'){ $alive=$true } }; if(-not $alive){ Remove-Item -LiteralPath $env:OC_LOCK -Recurse -Force; exit 0 } }; $d=Get-Item -LiteralPath $env:OC_LOCK -Force; $t=$d.LastWriteTime; $sf=Join-Path $env:OC_LOCK 'stamp'; if(Test-Path -LiteralPath $sf){ $s=(Get-Item -LiteralPath $sf -Force).LastWriteTime; if($s -gt $t){ $t=$s } }; if(((Get-Date)-$t).TotalHours -le 2){ exit 1 }; $live=$false; if(Test-Path -LiteralPath $env:OC_LTPID){ $c=(Get-Content -LiteralPath $env:OC_LTPID -ErrorAction SilentlyContinue | Select-Object -First 1); if($c){ if(Get-Process -Id ([int]$c) -ErrorAction SilentlyContinue){ $live=$true } } }; if($live){ exit 1 }; Remove-Item -LiteralPath $env:OC_LOCK -Recurse -Force; exit 0 }catch{ exit 0 }" >nul 2>&1
+if not errorlevel 1 goto :lk_take
 echo   [!] Another OpenCode launcher seems to be running.
 choice /c YN /n /m "   Continue anyway? [Y/N]: "
 if errorlevel 2 goto :quit_busy
 rmdir /s /q "%LOCKDIR%" >nul 2>&1
+:lk_take
 md "%LOCKDIR%" >nul 2>&1
+call :lock_touch
+set "OC_LOCK=%LOCKDIR%"
+"%PSX%" -NoProfile -Command "try{ $pp=(Get-CimInstance Win32_Process -Filter ('ProcessId='+$PID)).ParentProcessId; [IO.File]::WriteAllText((Join-Path $env:OC_LOCK 'owner'),[string]$pp) }catch{}" >nul 2>&1
 goto :eof
-REM Stale lock removed: create a new one.
-:lock_retry
-md "%LOCKDIR%" >nul 2>&1
-goto :eof
-REM User chose not to continue: exit.
+REM User chose not to continue.
+REM v2.22: this used to "goto :quit" from inside a called subroutine, so
+REM the caller resumed with an emptied scope and the script kept running.
+REM It sets a flag and returns now; the top-level caller does the exit.
+REM LOCK_FOREIGN keeps :quit from deleting a lock that is not ours.
 :quit_busy
 echo   Exiting.
 timeout /t 2 /nobreak >nul 2>&1
-goto :quit
+set "LOCK_FOREIGN=1"
+set "LOCK_BUSY=1"
+set "LOCKDIR="
+exit /b
+
+REM - refresh the lock timestamp (v2.22)
+REM Removing and re-creating the stamp entry is what actually bumps the
+REM folder's LastWriteTime on NTFS; rewriting it does not.
+:lock_touch
+if not defined LOCKDIR goto :eof
+if not exist "%LOCKDIR%\" goto :eof
+del /f /q "%LOCKDIR%\stamp" >nul 2>&1
+>"%LOCKDIR%\stamp" echo %RANDOM%%RANDOM% %DATE% %TIME%
+goto :eof
 
 REM - startup trace: one line per stage, appended to startup.log -----
 REM If the launcher freezes, the last line names the stage it froze in.
@@ -2723,14 +3267,22 @@ for /f "tokens=2 delims=()" %%v in ('findstr /b /c:"REM  OpenCode launcher  (" "
 if not defined SU_LV goto :su_delete
 if not defined SU_RV goto :su_delete
 call :trace upd_ver %SU_LV% / %SU_RV%
+REM v2.22: compare numerically, not by string equality. A repo copy that
+REM is OLDER used to be offered as an "update".
+set "VGT=0"
+call :ver_gt "%SU_RV%" "%SU_LV%"
+if "%VGT%"=="1" goto :su_new
 if /i "%SU_RV%"=="%SU_LV%" goto :su_same
+echo   [upd] repo copy is %SU_RV%, older than %SU_LV% - keeping this one.
+goto :su_delete
+:su_same
+echo   [upd] launcher matches the repo, %SU_LV%.
+goto :su_delete
+:su_new
 echo   [upd] update found: local %SU_LV% - repo %SU_RV%
 choice /c YN /n /m "   Replace this launcher with %SU_RV%? [Y/N]: "
 if errorlevel 2 goto :su_delete
 goto :su_apply
-:su_same
-echo   [upd] launcher matches the repo, %SU_LV%.
-goto :su_delete
 :su_apply
 call :trace upd_apply
 REM Backup first - it is never overwritten silently: timestamped name.
@@ -2809,8 +3361,17 @@ goto :eof
 REM Common exit: restore the folder with popd, remove the lock, and end the local scope.
 :quit
 if defined POPPED popd
+REM v2.23: a "second instance" exit must never kill the Tor and the bridge
+REM the other launcher is using. :tor_stop only runs for our own session,
+REM and the foreign lock is left alone as well.
+if defined LOCK_FOREIGN goto :quit_nolock
 call :tor_stop
+REM v2.22: never delete a lock that belongs to another instance the user
+REM chose not to interrupt.
 if exist "%STATE_DIR%\lock\" rmdir /s /q "%STATE_DIR%\lock" >nul 2>&1
+:quit_nolock
+REM v2.22: put the console code page back the way it was found.
+if defined OC_OLDCP chcp %OC_OLDCP% >nul 2>&1
 endlocal
 
 REM ============================================================
@@ -2847,7 +3408,7 @@ exit /b
 $ErrorActionPreference = 'Continue'
 try { [IO.File]::WriteAllText($env:OC_BRPIDF, [string]$PID) } catch { }
 function Write-BridgeLog([string]$m) {
-    try { Add-Content -LiteralPath $env:OC_BRLOG -Value ((Get-Date -Format o) + ' ' + $m) } catch { }
+    try { Add-Content -LiteralPath $env:OC_BRLOG -Value ((Get-Date -Format o) + ' ' + $m) -ErrorAction SilentlyContinue } catch { }
 }
 # reads EXACTLY $total bytes or returns $null at EOF or error. SOCKS
 # replies may arrive split across TCP reads; v2.20 consumes every reply
@@ -2974,6 +3535,15 @@ function Handle-Client($client) {
             $cs = $dst.GetStream()
             $rewritten = $headTxt -replace ('http://' + $hostName + ':' + $port), ''
             $rewritten = $rewritten -replace ('http://' + $hostName), ''
+            # v2.22: force "Connection: close". Only the FIRST request of a
+            # keep-alive stream carries an absolute URI; the second one
+            # arrived in origin form and the relay had nothing to rewrite,
+            # so the tunnel answered the wrong thing. Closing after one
+            # exchange keeps every request on the rewrite path.
+            $rewritten = [regex]::Replace($rewritten, '(?im)^Connection\s*:.*$', 'Connection: close')
+            if ($rewritten -notmatch '(?im)^Connection\s*:') {
+                $rewritten = $rewritten -replace "(`r`n`r`n)", "`r`nConnection: close`r`n`r`n"
+            }
             $bytes = [Text.Encoding]::ASCII.GetBytes($rewritten)
             $cs.Write($bytes, 0, $bytes.Length)
             Spawn-Pump $st $cs $PUMP_CODE
@@ -3004,6 +3574,14 @@ try {
             if (($pstate -eq 'Running') -or ($pstate -eq 'NotStarted')) { [void]$alive.Add($e) } else { try { $e.rs.Dispose() } catch { } }
         }
         $pool = $alive
+        # v2.22: cap concurrent connections. Every accepted socket opened a
+        # runspace with no ceiling at all, so a browser burst could spawn
+        # hundreds of them. Over the cap the connection is dropped instead.
+        if ($pool.Count -ge 200) {
+            Write-BridgeLog ('busy: connection cap reached, dropping a client')
+            try { $client.Close() } catch { }
+            continue
+        }
         $rs = [runspacefactory]::CreateRunspace()
         $rs.Open()
         $rs.SessionStateProxy.SetVariable('CLIENT', $client)

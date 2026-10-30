@@ -1,4 +1,4 @@
-# OpenCode Infinite - launcher handbook (v2.21)
+# OpenCode Infinite - launcher handbook (v2.25)
 
 A single-file Windows batch launcher for OpenCode that adds multi-egress
 (Cloudflare WARP, Tor, free/custom HTTP proxy lists, or direct), dependency
@@ -36,14 +36,14 @@ from a bare machine.
 PowerShell, no arg-passing quoting pitfalls):**
 
 ```powershell
-[Net.ServicePointManager]::SecurityProtocol='Tls12'; iwr https://raw.githubusercontent.com/jeko1107/opencode-infinite/main/OpenCode%20Infinite.bat -UseBasicParsing -OutFile "$env:TEMP\oci.bat"; Copy-Item "$env:TEMP\oci.bat" "$env:USERPROFILE\Desktop\OpenCode Infinite.bat" -Force; & "$env:TEMP\oci.bat"
+[Net.ServicePointManager]::SecurityProtocol='Tls12'; iwr https://github.com/jeko1107/opencode-infinite/releases/latest/download/OpenCode-Infinite.bat -UseBasicParsing -OutFile "$env:TEMP\oci.bat"; Copy-Item "$env:TEMP\oci.bat" "$env:USERPROFILE\Desktop\OpenCode Infinite.bat" -Force; & "$env:TEMP\oci.bat"
 ```
 
 **cmd (classic shell):** `curl.exe` ships with Windows 10 1803+ and Windows 11,
 so this is one line whole:
 
 ```cmd
-curl.exe -f -L https://raw.githubusercontent.com/jeko1107/opencode-infinite/main/OpenCode%20Infinite.bat -o "%USERPROFILE%\Desktop\OpenCode Infinite.bat" && "%USERPROFILE%\Desktop\OpenCode Infinite.bat"
+curl.exe -f -L https://github.com/jeko1107/opencode-infinite/releases/latest/download/OpenCode-Infinite.bat -o "%USERPROFILE%\Desktop\OpenCode Infinite.bat" && "%USERPROFILE%\Desktop\OpenCode Infinite.bat"
 ```
 
 After the first run, the launcher verifies itself against the repo on every
@@ -52,8 +52,10 @@ backs itself up and swaps in the new version on a harmless restart - no laps
 to keep provoking your memory.
 
 **If a machine runs an OLD version (no [upd] block):** in the same folder, run
-the repo companion file `Update launcher.bat`; it replaces the old copy
-(Beside, Desktop, or OneDrive-Desktop, first hit) with the current one.
+the repo companion file `Update launcher.bat`; it downloads the asset of the
+**latest GitHub Release** (`OpenCode-Infinite.bat`) and replaces the old copy
+(Beside, Desktop, or OneDrive-Desktop, first hit) with it. If the Release is not
+reachable it falls back to the commit-pinned copy on `main`.
 
 ---
 
@@ -142,6 +144,34 @@ Install fallback:
 > npm present -> `npm install -g opencode-ai`
 > npm absent -> standalone build from GitHub releases (x64 or arm64)
 
+### NEW in v2.22 - v2.25 - hardening pass, verified end to end
+
+Every item below was reproduced first and checked after the fix (WARP, TOR and
+direct runs against a stand-in `opencode`, so no real quota was spent).
+
+- **Service detection (v2.25).** OpenCode v2 lists the subcommand as
+  `service    Manage the background server`; the old marker `opencode service`
+  never matched, so every `service restart` / `service stop` in the launcher
+  was dead code. Both markers are searched now.
+- **No more endless menu on closed stdin (v2.25).** `choice` answers 255 (not
+  0) at EOF and 255 satisfies every `if errorlevel N`, so the main menu looped
+  forever through the token-reset prompt. The three number menus now leave.
+- **Paths with spaces (v2.25).** The TUI and the resume ran `cmd /c <exe>` with
+  the exe unquoted, so `C:\Users\John Smith\...` failed. The command line is
+  one string with the exe quoted inside the `/s /c` wrapper.
+- **Service restarts under the proxy env (v2.25).** After a rotation the
+  background service was restarted on the user's own env (direct), so later
+  requests left on the real IP. The proxy env is exported around that call.
+- **Tor already running (v2.25).** `TOR_DIR` did not exist yet, so the bridge
+  could write neither `bridge.log` nor `bridge.pid` and survived the launcher.
+- **Stale lock (v2.25).** Closing the window with the X skips the cleanup and
+  blocked the next start for up to 2 hours. The lock records the owning
+  `cmd.exe` (`lock\owner`); a dead owner is a stale lock at any age.
+- **Version compare (v2.25).** Leading zeros (`2.08.1`) and one-part versions
+  (`2`) no longer break `:ver_gt`.
+- **v2.22 - v2.24.** Every fixed bug carries an inline `REM v2.2x:` note in
+  the file; the biggest ones are the proxy-variable restore, the TOR circuit
+  renewal with a bounded counter and the built-in HTTP-to-SOCKS bridge.
 ### NEW in v2.16 - v2.21 - TOR egress, custom proxy lists, hardening
 
 **Egress modes (since v2.17).** After the working folder is fixed the menu
@@ -365,6 +395,9 @@ On every start, before anything interactive:
    restarts. The main script exits before anything reads the swapped file.
 
 The check is silent when offline or when the repo is unreachable.
+
+Since v2.16 the check ships OFF (`UPDATE_CHECK=0` in the settings block): the
+launcher only touches the network for itself when you set it to `1`.
 
 ---
 
