@@ -435,6 +435,7 @@ goto :mode_menu
 set "APP_MODE=DESKTOP"
 echo.
 echo   [app] DESKTOP "%OC_DESKTOP%"
+call :desktop_update_check
 :mode_done
 REM The desktop app has its own project picker: no folder step for it.
 if /i not "%APP_MODE%"=="DESKTOP" goto :mode_folder
@@ -2865,6 +2866,45 @@ taskkill /f /im "OpenCode.exe" >nul 2>&1
 taskkill /f /im "opencode.exe" >nul 2>&1
 taskkill /f /im "opencode-cli.exe" >nul 2>&1
 timeout /t 2 /nobreak >nul 2>&1
+goto :eof
+
+REM - installed desktop version: DVER from the exe's file version (v2.28)
+:desktop_version
+set "DVER="
+set "OC_DEXE=%OC_DESKTOP%"
+for /f "usebackq delims=" %%v in (`%PSX% -NoProfile -Command "try{ (Get-Item -LiteralPath $env:OC_DEXE).VersionInfo.FileVersion }catch{}"`) do if not defined DVER set "DVER=%%v"
+goto :eof
+
+REM - offer a newer desktop app, once per start, ask first (v2.28)
+REM The installed version comes from the exe, the latest from the official
+REM release metadata (direct, no proxy). No network or an unreadable version
+REM leaves everything as it was; nothing is replaced without a Y. The silent
+REM installer upgrades the app in place, so chats and settings stay.
+:desktop_update_check
+if defined ODUPD goto :eof
+set "ODUPD=1"
+if not defined OC_DESKTOP goto :eof
+call :desktop_version
+if not defined DVER goto :eof
+call :oc_api desktop ""
+if not defined OCA_VER goto :eof
+set "VGT=0"
+call :ver_gt "%OCA_VER%" "%DVER%"
+if not "%VGT%"=="1" goto :eof
+echo.
+echo   OpenCode desktop update available: %DVER% -^> %OCA_VER%
+echo   It closes every OpenCode process first, the app and its service included.
+choice /c YN /n /m "   Update now? [Y/N]: "
+REM errorlevel 0 (no stdin) and 2 (N) both skip the install.
+if not errorlevel 1 goto :eof
+if errorlevel 2 goto :eof
+taskkill /f /im "OpenCode.exe" >nul 2>&1
+taskkill /f /im "opencode-cli.exe" >nul 2>&1
+timeout /t 2 /nobreak >nul 2>&1
+call :install_desktop
+call :find_desktop_app
+call :desktop_version
+if defined DVER echo   [update] OpenCode desktop now reports %DVER%
 goto :eof
 
 REM - download and silently install the official desktop app (v2.27)

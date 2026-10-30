@@ -162,6 +162,13 @@ Install fallback:
   for every install: an npm install is updated through npm, anything else
   through the standalone build. It asks first and closes every opencode process
   before replacing files.
+- **Desktop update.** In Desktop mode, once per start, the launcher reads the
+  installed version from `OpenCode.exe` and compares it with the official one
+  (`desktop` metadata on opencode.ai). When a newer one exists it asks
+  `Update now? [Y/N]`, closes every OpenCode process and runs the same verified
+  silent installer used for the first install (NSIS, per-user, no UAC), which
+  upgrades the app in place; it then shows the new version. No network or an
+  unreadable version changes nothing.
 - **npm 12 and the 229-byte stub.** npm 12 blocks the `@opencode/cli`
   postinstall, which leaves `bin\opencode.exe` as a stub that prints
   "postinstall script was not run". The launcher installs with
@@ -583,7 +590,7 @@ certutil -hashfile "OpenCode Infinite.bat" SHA256
 ```
 
 The v2.28 file hashes to
-`CFD6810A33BDF50A8E544365C8BBC2974ED39F8C78D2CA68597C9CAC0F21724B`.
+`752F2F9B7DA7F83C184A8AFC2E2AAACEAE6BDA4A9A2E4BC46D286BD674BF9703`.
 A different hash means you are not on the shipped copy - re-download it
 with the one-line install in section 2. Stale copies usually trace back
 to mid-download truncation, or someone else's half-broken mirror.
