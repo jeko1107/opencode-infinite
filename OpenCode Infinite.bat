@@ -2,10 +2,10 @@
 setlocal EnableExtensions
 title OpenCode
 REM ============================================================
-REM  OpenCode launcher  (v2.25)
+REM  OpenCode launcher  (v2.26)
 REM  Multi-egress (WARP / TOR / free HTTP) + dependency bootstrap
 REM  + auto-resume.
-REM  v2.22 - v2.25: every fixed bug carries an inline "REM v2.2x:"
+REM  v2.22 - v2.26: every fixed bug carries an inline "REM v2.2x:"
 REM  note.
 REM
 REM  Usage:
@@ -382,6 +382,52 @@ REM nothing to do or offline; asks before ever replacing this file.
 if "%UPDATE_CHECK%"=="1" call :self_update
 
 REM ============================================================
+REM  0) APP MODE: CLI (terminal TUI) or the desktop app
+REM ============================================================
+REM v2.26: new. APP_MODE=CLI keeps the whole flow as it was. APP_MODE=DESKTOP launches
+REM the OpenCode desktop exe through the same egress, and restarts it after
+REM every rotation (there is no CLI chat to resume). OC_APP overrides the exe.
+:mode_menu
+cls
+call :find_desktop_app
+echo ============================================================
+echo   OpenCode - how do you want to run it?
+echo ============================================================
+echo.
+echo   [1] CLI      - terminal TUI ^(chat resumes on every new IP^)
+echo   [2] Desktop  - the OpenCode desktop app ^(restarted on every new IP^)
+if defined OC_DESKTOP echo       "%OC_DESKTOP%"
+if not defined OC_DESKTOP echo       ^(not found - set OC_APP to its OpenCode.exe^)
+echo   [3] Exit
+echo.
+echo   One key, no Enter.
+echo.
+choice /c 123 /n /m "Pick: "
+if errorlevel 100 goto :quit
+if not errorlevel 1 goto :mode_menu
+if errorlevel 3 goto :quit
+if errorlevel 2 goto :mode_desktop
+set "APP_MODE=CLI"
+goto :mode_done
+:mode_desktop
+call :find_desktop_app
+if defined OC_DESKTOP goto :mode_desktop_ok
+echo.
+echo   [!] OpenCode desktop not found. Install it, or set OC_APP to its OpenCode.exe.
+pause
+goto :mode_menu
+:mode_desktop_ok
+set "APP_MODE=DESKTOP"
+echo.
+echo   [app] DESKTOP "%OC_DESKTOP%"
+:mode_done
+REM The desktop app has its own project picker: no folder step for it.
+if /i not "%APP_MODE%"=="DESKTOP" goto :mode_folder
+set "OPFOLDER=%CD%"
+goto :folder_ok
+:mode_folder
+
+REM ============================================================
 REM  1) WORKING FOLDER
 REM ============================================================
 REM No parenthesised block may expand a path variable: a folder like
@@ -680,6 +726,7 @@ echo   OpenCode
 echo.
 echo   Folder : "%CD%"
 echo   Egress : %EGRESS%
+echo   Mode   : %APP_MODE%
 if defined ACTIVE_PROXY echo   Proxy  : %ACTIVE_PROXY%
 REM Show the WARP path only in WARP mode; otherwise say rotation is off.
 if /i not "%EGRESS%"=="WARP" goto :menu_warp_done
@@ -722,7 +769,8 @@ echo   [1] Fresh start   - get a new IP / proxy, then open OpenCode
 echo                       (your chats and history stay untouched)
 echo   [2] Continue      - same egress, open OpenCode as it was
 echo   [3] Change IP     - rotate / pick new proxy only
-echo   [4] Folder        - work in a different folder
+if /i not "%APP_MODE%"=="DESKTOP" echo   [4] Folder        - work in a different folder
+if /i "%APP_MODE%"=="DESKTOP" echo   [4] Mode          - switch between CLI and Desktop
 echo   [5] Deep reset    - kill opencode, move chats to the Desktop,
 echo                       clear saved tokens, open a fresh session
 echo   [6] Exit
@@ -744,10 +792,15 @@ REM NEW: 7 is checked first (highest number first).
 if errorlevel 7 goto :run_soft
 if errorlevel 6 goto :quit
 if errorlevel 5 goto :run_deep
-if errorlevel 4 goto :folder
+if errorlevel 4 goto :menu_opt4
 if errorlevel 3 goto :rotate
 if errorlevel 2 goto :run_warm
 goto :run_cold
+
+REM Option 4: the desktop app has no folder step, so it switches mode instead.
+:menu_opt4
+if /i "%APP_MODE%"=="DESKTOP" goto :mode_menu
+goto :folder
 
 REM Option 1 (fresh start): COLD=1 asks for a new IP before launching.
 :run_cold
@@ -1273,6 +1326,11 @@ REM The call is bounded by RESUME_TIMEOUT: a resume that never answers is a
 REM dead exit IP, not a reason to freeze the console.
 :resume_and_run
 if not defined RESUME goto :run
+if /i not "%APP_MODE%"=="DESKTOP" goto :resume_cli
+echo   restarting the desktop app on the new egress...
+set "RESUME="
+goto :run
+:resume_cli
 echo   sending "%RESUME_MSG%" so the chat picks up where it stopped...
 REM The proxy must answer before the message is sent: a dead route here is
 REM the exact case that used to block forever with both streams discarded.
@@ -1431,6 +1489,15 @@ REM Start opencode, save its PID to tui.pid, wait for it to exit, and return its
 :launch
 set "OC_EXE=%OC_CMD%"
 set "OC_FLAGS=%FLAGS%"
+if /i not "%APP_MODE%"=="DESKTOP" goto :launch_go
+REM Desktop: no --continue (it is a CLI flag). A leftover app or sidecar was
+REM born without the proxy env and would keep the old egress, so close both.
+set "OC_EXE=%OC_DESKTOP%"
+set "OC_FLAGS="
+taskkill /f /im "OpenCode.exe" >nul 2>&1
+taskkill /f /im "opencode-cli.exe" >nul 2>&1
+timeout /t 2 /nobreak >nul 2>&1
+:launch_go
 set "OC_PIDF=%STATE_DIR%\tui.pid"
 if exist "%OC_PIDF%" del /f /q "%OC_PIDF%" >nul 2>&1
 REM Start-Process -ArgumentList treats one spaced string as ONE argument:
@@ -2804,6 +2871,16 @@ taskkill /f /im "OpenCode.exe" >nul 2>&1
 taskkill /f /im "opencode.exe" >nul 2>&1
 taskkill /f /im "opencode-cli.exe" >nul 2>&1
 timeout /t 2 /nobreak >nul 2>&1
+goto :eof
+
+REM - locate the OpenCode desktop exe (OC_APP first, then the usual installs)
+:find_desktop_app
+set "OC_DESKTOP="
+if defined OC_APP if exist "%OC_APP%" set "OC_DESKTOP=%OC_APP%"
+if not defined OC_DESKTOP if exist "%LOCALAPPDATA%\Programs\ai.opencode.desktop\OpenCode.exe" set "OC_DESKTOP=%LOCALAPPDATA%\Programs\ai.opencode.desktop\OpenCode.exe"
+if not defined OC_DESKTOP if exist "%LOCALAPPDATA%\Programs\@opencode-ai\desktop\OpenCode.exe" set "OC_DESKTOP=%LOCALAPPDATA%\Programs\@opencode-ai\desktop\OpenCode.exe"
+if not defined OC_DESKTOP if exist "%LOCALAPPDATA%\Programs\opencode\OpenCode.exe" set "OC_DESKTOP=%LOCALAPPDATA%\Programs\opencode\OpenCode.exe"
+if not defined OC_DESKTOP if exist "%ProgramFiles%\opencode\OpenCode.exe" set "OC_DESKTOP=%ProgramFiles%\opencode\OpenCode.exe"
 goto :eof
 
 REM - the desktop can be redirected to OneDrive or another drive

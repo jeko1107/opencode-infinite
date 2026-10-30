@@ -1,4 +1,4 @@
-# OpenCode Infinite - launcher handbook (v2.25)
+# OpenCode Infinite - launcher handbook (v2.26)
 
 A single-file Windows batch launcher for OpenCode that adds multi-egress
 (Cloudflare WARP, Tor, free/custom HTTP proxy lists, or direct), dependency
@@ -63,7 +63,7 @@ reachable it falls back to the commit-pinned copy on `main`.
 
 | How you start it | What happens |
 |---|---|
-| Double-click | Folder menu, then the main menu |
+| Double-click | Mode menu (CLI / Desktop), folder menu (CLI only), egress menu, then the main menu |
 | Drag a folder onto the `.bat` | Jumps straight into that folder |
 | `OpenCode Infinite.bat "D:\work\project"` | Same, from a shell |
 | `OpenCode Infinite.bat \\server\share` | UNC paths work (`pushd`, not `cd /d`) |
@@ -97,9 +97,12 @@ environment variables, which is what keeps it universal.
 | `[1]` | Fresh start | new IP (ensure-different) + open a new session |
 | `[2]` | Continue | same IP, same session |
 | `[3]` | Change IP | rotates the current egress: WARP exit IP, TOR fresh circuit, PROXY next candidate; mode NONE has nothing to rotate |
-| `[4]` | Folder | change working folder |
+| `[4]` | Folder (CLI) / Mode (Desktop) | CLI: change working folder. Desktop: switch between CLI and Desktop |
 | `[5]` | Deep reset | kill OpenCode, archive chats to the Desktop, clear tokens, fresh session |
 | `[6]` | Exit | closes the lock and leaves |
+
+The very first menu picks **CLI** (terminal TUI) or **Desktop** (the OpenCode
+desktop app). The main menu header shows the active `Mode`.
 
 Before the main menu appears, the launcher asks the **egress mode** once:
 `[1] WARP`, `[2] TOR`, `[3] PROXY`, `[4] NONE` - the proxy lives only in
@@ -143,6 +146,33 @@ Install fallback:
 
 > npm present -> `npm install -g opencode-ai`
 > npm absent -> standalone build from GitHub releases (x64 or arm64)
+
+### NEW in v2.26 - CLI / Desktop mode menu
+
+The first menu now asks how to run OpenCode. Nothing changes for **CLI**.
+
+- **Desktop mode.** Launches `OpenCode.exe` through the same egress
+  (WARP / TOR / PROXY / NONE). It looks for the exe in `OC_APP` (environment
+  variable, your own path first), then `%LOCALAPPDATA%\Programs\ai.opencode.desktop\`,
+  `...\Programs\@opencode-ai\desktop\`, `...\Programs\opencode\` and
+  `%ProgramFiles%\opencode\`. The menu shows the path it found, or says it
+  was not found.
+- **No folder step in Desktop.** The app has its own project picker, so the
+  folder menu is skipped. In the main menu `[4]` becomes **Mode** and goes back
+  to the CLI / Desktop choice.
+- **Rotation restarts the app.** After a new IP the launcher closes the app and
+  its sidecar and opens it again under the new proxy env. The CLI "continue"
+  message is not sent: the app reopens where it was and you continue yourself.
+- **Closes every opencode process.** Before a Desktop launch it stops
+  `OpenCode.exe` / `opencode-cli.exe` (taskkill is case-insensitive, so a
+  standalone `opencode.exe` CLI left open by hand dies too).
+- **Scope.** The proxy is set only in the environment of the launched app; no
+  system proxy, registry or `setx` is touched.
+- **Known limit.** The app's background service (`opencode-cli.exe`, the process
+  that talks to the API) honours `HTTP_PROXY` and uses the egress. The Electron
+  shell itself is Chromium, which ignores `HTTP_PROXY`, so its own traffic
+  (interface, updates) leaves on your real IP. A `--proxy-server` argument for
+  the shell is not wired yet.
 
 ### NEW in v2.22 - v2.25 - hardening pass, verified end to end
 
@@ -499,8 +529,8 @@ move "%USERPROFILE%\Desktop\opencode_chats_archiviate\<stamp>\opencode.db" "%USE
 certutil -hashfile "OpenCode Infinite.bat" SHA256
 ```
 
-The v2.21 file hashes to
-`838B3152B940AAFDF2FC4774A6C533F96471344320332A12BAF3C27439E90AE4`.
+The v2.26 file hashes to
+`D7A42A71B33E9A9A36A789ADF20731C012AF1559C567F5D667CD87CE94810C33`.
 A different hash means you are not on the shipped copy - re-download it
 with the one-line install in section 2. Stale copies usually trace back
 to mid-download truncation, or someone else's half-broken mirror.
