@@ -2,10 +2,10 @@
 setlocal EnableExtensions
 title OpenCode
 REM ============================================================
-REM  OpenCode launcher  (v2.26)
+REM  OpenCode launcher  (v2.27)
 REM  Multi-egress (WARP / TOR / free HTTP) + dependency bootstrap
 REM  + auto-resume.
-REM  v2.22 - v2.26: every fixed bug carries an inline "REM v2.2x:"
+REM  v2.22 - v2.27: every fixed bug carries an inline "REM v2.2x:"
 REM  note.
 REM
 REM  Usage:
@@ -237,6 +237,10 @@ REM host that does not resolve rejects every proxy and kills PROXY mode.
 REM Set it to 1 only after checking the URL by hand.
 set "PROXY_API_CHECK=0"
 set "PROXY_API_CHECK_URL=https://api.opencode.ai/"
+REM v2.27: official OpenCode desktop installer (NSIS, silent /S) from the
+REM GitHub Releases. The launcher appends opencode-desktop-win-x64.exe or
+REM ...-arm64.exe; 32-bit Windows has no desktop build.
+set "DESKTOP_URL_BASE=https://github.com/anomalyco/opencode/releases/latest/download"
 
 REM - internal
 REM Local port where the WARP proxy listens (WARP proxy mode).
@@ -397,7 +401,7 @@ echo.
 echo   [1] CLI      - terminal TUI ^(chat resumes on every new IP^)
 echo   [2] Desktop  - the OpenCode desktop app ^(restarted on every new IP^)
 if defined OC_DESKTOP echo       "%OC_DESKTOP%"
-if not defined OC_DESKTOP echo       ^(not found - set OC_APP to its OpenCode.exe^)
+if not defined OC_DESKTOP echo       ^(not found - [2] offers to install it^)
 echo   [3] Exit
 echo.
 echo   One key, no Enter.
@@ -413,7 +417,14 @@ goto :mode_done
 call :find_desktop_app
 if defined OC_DESKTOP goto :mode_desktop_ok
 echo.
-echo   [!] OpenCode desktop not found. Install it, or set OC_APP to its OpenCode.exe.
+echo   [!] OpenCode desktop not found.
+choice /c YN /n /m "   Download and install it now? [Y/N]: "
+if errorlevel 100 goto :quit
+if errorlevel 2 goto :mode_menu
+call :install_desktop
+call :find_desktop_app
+if defined OC_DESKTOP goto :mode_desktop_ok
+echo   [!] still not found - set OC_APP to its OpenCode.exe.
 pause
 goto :mode_menu
 :mode_desktop_ok
@@ -2873,14 +2884,88 @@ taskkill /f /im "opencode-cli.exe" >nul 2>&1
 timeout /t 2 /nobreak >nul 2>&1
 goto :eof
 
+REM - download and silently install the official desktop app (v2.27)
+REM shortcut: size gate only, no hash check - pin the asset digest if needed.
+:install_desktop
+set "OC_DESK_SCANNED="
+if "%REAL86%"=="1" goto :id_no86
+call :have_exe curl.exe
+set "HAVE_CURL=%HAVE%"
+set "ID_ARCH=x64"
+if /i "%PROCESSOR_ARCHITECTURE%"=="ARM64" set "ID_ARCH=arm64"
+if /i "%PROCESSOR_ARCHITEW6432%"=="ARM64" set "ID_ARCH=arm64"
+set "ID_URL=%DESKTOP_URL_BASE%/opencode-desktop-win-%ID_ARCH%.exe"
+set "ID_EXE=%TEMP%\opencode-desktop-setup.exe"
+if exist "%ID_EXE%" del /f /q "%ID_EXE%" >nul 2>&1
+REM download direct: the user's own proxy variables are put back below
+set "ID_HP=%HTTP_PROXY%"
+set "ID_SP=%HTTPS_PROXY%"
+set "HTTP_PROXY="
+set "HTTPS_PROXY="
+set "OC_URL=%ID_URL%"
+set "OC_OUT=%ID_EXE%"
+echo   downloading the OpenCode desktop installer, about 120 MB...
+if "%HAVE_CURL%"=="1" goto :id_curl
+"%PSX%" -NoProfile -Command "try{[Net.ServicePointManager]::SecurityProtocol=[Net.SecurityProtocolType]::Tls12; Invoke-WebRequest -UseBasicParsing -Uri $env:OC_URL -OutFile $env:OC_OUT}catch{}" >nul 2>&1
+goto :id_check
+:id_curl
+curl.exe -L -f -s --max-time 900 --noproxy "*" -o "%ID_EXE%" "%ID_URL%"
+if not errorlevel 1 goto :id_check
+REM Direct egress failed: retry through the Windows proxy settings.
+"%PSX%" -NoProfile -Command "try{[Net.ServicePointManager]::SecurityProtocol=[Net.SecurityProtocolType]::Tls12; Invoke-WebRequest -UseBasicParsing -Uri $env:OC_URL -OutFile $env:OC_OUT}catch{}" >nul 2>&1
+:id_check
+set "HTTP_PROXY=%ID_HP%"
+set "HTTPS_PROXY=%ID_SP%"
+set "ID_OK=0"
+if exist "%ID_EXE%" for %%M in ("%ID_EXE%") do if not "%%~zM"=="" if %%~zM GTR 50000000 set "ID_OK=1"
+if "%ID_OK%"=="1" goto :id_run
+echo   [!] download failed.
+echo       grab it by hand and run it: %ID_URL%
+echo       or from the website: https://opencode.ai/download
+if exist "%ID_EXE%" del /f /q "%ID_EXE%" >nul 2>&1
+goto :eof
+:id_run
+echo   installing, accept the UAC prompt if one appears...
+set "OC_ID=%ID_EXE%"
+"%PSX%" -NoProfile -Command "try{Start-Process $env:OC_ID -ArgumentList '/S' -Wait}catch{}" >nul 2>&1
+del /f /q "%ID_EXE%" >nul 2>&1
+goto :eof
+:id_no86
+echo   [!] the desktop app has no 32-bit Windows build.
+goto :eof
+
 REM - locate the OpenCode desktop exe (OC_APP first, then the usual installs)
 :find_desktop_app
 set "OC_DESKTOP="
 if defined OC_APP if exist "%OC_APP%" set "OC_DESKTOP=%OC_APP%"
-if not defined OC_DESKTOP if exist "%LOCALAPPDATA%\Programs\ai.opencode.desktop\OpenCode.exe" set "OC_DESKTOP=%LOCALAPPDATA%\Programs\ai.opencode.desktop\OpenCode.exe"
-if not defined OC_DESKTOP if exist "%LOCALAPPDATA%\Programs\@opencode-ai\desktop\OpenCode.exe" set "OC_DESKTOP=%LOCALAPPDATA%\Programs\@opencode-ai\desktop\OpenCode.exe"
-if not defined OC_DESKTOP if exist "%LOCALAPPDATA%\Programs\opencode\OpenCode.exe" set "OC_DESKTOP=%LOCALAPPDATA%\Programs\opencode\OpenCode.exe"
-if not defined OC_DESKTOP if exist "%ProgramFiles%\opencode\OpenCode.exe" set "OC_DESKTOP=%ProgramFiles%\opencode\OpenCode.exe"
+if defined OC_DESKTOP goto :eof
+if not defined OC_DESKTOP call :fda_try "%LOCALAPPDATA%\Programs\ai.opencode.desktop\OpenCode.exe"
+if not defined OC_DESKTOP call :fda_try "%LOCALAPPDATA%\Programs\@opencode-ai\desktop\OpenCode.exe"
+if not defined OC_DESKTOP call :fda_try "%LOCALAPPDATA%\Programs@opencode-aidesktop\OpenCode.exe"
+if not defined OC_DESKTOP call :fda_try "%LOCALAPPDATA%\Programs\opencode-desktop\OpenCode.exe"
+if not defined OC_DESKTOP call :fda_try "%LOCALAPPDATA%\Programs\opencode\OpenCode.exe"
+if not defined OC_DESKTOP call :fda_try "%LOCALAPPDATA%\Programs\OpenCode\OpenCode.exe"
+if not defined OC_DESKTOP call :fda_try "%LOCALAPPDATA%\ai.opencode.desktop\OpenCode.exe"
+if not defined OC_DESKTOP call :fda_try "%LOCALAPPDATA%\opencode-desktop\OpenCode.exe"
+if not defined OC_DESKTOP call :fda_try "%LOCALAPPDATA%\OpenCode\OpenCode.exe"
+if not defined OC_DESKTOP call :fda_try "%ProgramFiles%\ai.opencode.desktop\OpenCode.exe"
+if not defined OC_DESKTOP call :fda_try "%ProgramFiles%\@opencode-ai\desktop\OpenCode.exe"
+if not defined OC_DESKTOP call :fda_try "%ProgramFiles%\opencode-desktop\OpenCode.exe"
+if not defined OC_DESKTOP call :fda_try "%ProgramFiles%\opencode\OpenCode.exe"
+if not defined OC_DESKTOP call :fda_try "%ProgramFiles%\OpenCode\OpenCode.exe"
+if not defined OC_DESKTOP call :fda_try "%ProgramFiles(x86)%\opencode\OpenCode.exe"
+if not defined OC_DESKTOP call :fda_try "%ProgramFiles(x86)%\OpenCode\OpenCode.exe"
+if defined OC_DESKTOP goto :eof
+REM Not in a known folder: ask the uninstall registry keys (read only), a running
+REM OpenCode.exe and a shallow search of the usual roots. Only an exe with
+REM resources\app.asar next to it counts, so the CLI opencode.exe is never taken.
+REM Done once per session; :install_desktop clears the flag.
+if defined OC_DESK_SCANNED goto :eof
+set "OC_DESK_SCANNED=1"
+for /f "usebackq delims=" %%i in (`%PSX% -NoProfile -Command "$c=@(); foreach($r in 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall\*','HKLM:\Software\Microsoft\Windows\CurrentVersion\Uninstall\*','HKLM:\Software\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall\*'){ foreach($k in @(Get-ItemProperty $r -ErrorAction SilentlyContinue)){ if($k.DisplayName -like '*opencode*'){ if($k.InstallLocation){$c+=Join-Path $k.InstallLocation 'OpenCode.exe'}; if($k.DisplayIcon){$c+=(($k.DisplayIcon -replace ',\d+$','').Trim([char]34))} } } }; foreach($p in @(Get-Process -Name OpenCode -ErrorAction SilentlyContinue)){ if($p.Path){$c+=$p.Path} }; foreach($rd in @(@($env:LOCALAPPDATA+'\Programs',3),@($env:ProgramFiles,2),@(${env:ProgramFiles(x86)},2),@($env:LOCALAPPDATA,1),@($env:APPDATA,1))){ if($rd[0] -and (Test-Path -LiteralPath $rd[0])){ foreach($f in @(Get-ChildItem -LiteralPath $rd[0] -Filter OpenCode.exe -Recurse -Depth $rd[1] -ErrorAction SilentlyContinue)){ $c+=$f.FullName } } }; foreach($x in $c){ if($x -and (Test-Path -LiteralPath $x) -and (Test-Path -LiteralPath (Join-Path (Split-Path $x) 'resources\app.asar'))){ $x; break } }"`) do if not defined OC_DESKTOP set "OC_DESKTOP=%%i"
+goto :eof
+:fda_try
+if exist "%~1" if exist "%~dp1resources\app.asar" set "OC_DESKTOP=%~1"
 goto :eof
 
 REM - the desktop can be redirected to OneDrive or another drive

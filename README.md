@@ -1,4 +1,4 @@
-# OpenCode Infinite - launcher handbook (v2.26)
+# OpenCode Infinite - launcher handbook (v2.27)
 
 A single-file Windows batch launcher for OpenCode that adds multi-egress
 (Cloudflare WARP, Tor, free/custom HTTP proxy lists, or direct), dependency
@@ -146,6 +146,24 @@ Install fallback:
 
 > npm present -> `npm install -g opencode-ai`
 > npm absent -> standalone build from GitHub releases (x64 or arm64)
+
+### NEW in v2.27 - Desktop installer and wider path search
+
+- **Installs the desktop app.** In Desktop mode, when no `OpenCode.exe` is
+  found, the launcher asks `Download and install it now? [Y/N]`. It downloads
+  the official installer from the GitHub Releases
+  (`opencode-desktop-win-x64.exe`, or `-arm64` on ARM) with curl, no proxy,
+  checks it is over 50 MB, runs it silently (`/S`) and looks for the exe again.
+  The base URL is the `DESKTOP_URL_BASE` setting. 32-bit Windows has no desktop
+  build. No hash check, only the size gate.
+- **Finds the app in any folder.** First `OC_APP`, then 16 known folders under
+  `%LOCALAPPDATA%\Programs`, `%LOCALAPPDATA%`, `%ProgramFiles%` and
+  `%ProgramFiles(x86)%` (`ai.opencode.desktop`, `@opencode-ai\desktop`,
+  `opencode-desktop`, `opencode`, `OpenCode`, ...). If none matches, it reads the
+  uninstall registry keys (read only), checks a running `OpenCode.exe` and does a
+  shallow search of the usual roots, once per session.
+- **Never takes the CLI.** Only an `OpenCode.exe` with `resources\app.asar`
+  next to it counts, so the CLI `opencode.exe` is not mistaken for the app.
 
 ### NEW in v2.26 - CLI / Desktop mode menu
 
@@ -529,8 +547,8 @@ move "%USERPROFILE%\Desktop\opencode_chats_archiviate\<stamp>\opencode.db" "%USE
 certutil -hashfile "OpenCode Infinite.bat" SHA256
 ```
 
-The v2.26 file hashes to
-`D7A42A71B33E9A9A36A789ADF20731C012AF1559C567F5D667CD87CE94810C33`.
+The v2.27 file hashes to
+`6F5253CA1688B5A7C2461768E33A4F82B721443F11D0DFE393A8C856346606E7`.
 A different hash means you are not on the shipped copy - re-download it
 with the one-line install in section 2. Stale copies usually trace back
 to mid-download truncation, or someone else's half-broken mirror.
