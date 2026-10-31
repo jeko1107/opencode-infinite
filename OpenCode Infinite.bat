@@ -2,7 +2,7 @@
 setlocal EnableExtensions
 title OpenCode-Infinite
 REM ============================================================
-REM  OpenCode launcher  (v2.33)
+REM  OpenCode launcher  (v2.34)
 REM  Multi-egress (WARP / TOR / free HTTP) + dependency bootstrap
 REM  + auto-resume.
 REM  v2.22 - v2.29: every fixed bug carries an inline "REM v2.2x:"
@@ -698,7 +698,7 @@ set "LOG_ARGS=%*"
 if defined LOG_ARGS set "LOG_ARGS=%LOG_ARGS:"='%"
 set "LOG_OSV="
 for /f "tokens=*" %%v in ('ver') do if not defined LOG_OSV set "LOG_OSV=%%v"
-call :log "start v2.33 args=[%LOG_ARGS%] cwd=%CD% arch=%PROCESSOR_ARCHITECTURE% %LOG_OSV%" boot
+call :log "start v2.34 args=[%LOG_ARGS%] cwd=%CD% arch=%PROCESSOR_ARCHITECTURE% %LOG_OSV%" boot
 REM v2.30: one official copy. Setup copies this file to STATE_DIR\app and the opencode
 REM command runs that copy. A duplicate (a second download, "(1)") hands over to it, or
 REM replaces it when it is the newer one.
@@ -5053,6 +5053,13 @@ $Themes = @{
   mono   = @{ Title = '1'; Accent = '0'; Sel = '7'; Border = '0'; Panel = '' }
   rainbow = @{ Title = '1'; Accent = '36'; Sel = '30;46'; Border = '35'; Panel = ''; Rainbow = $true }
 }
+# rainbow: the phase moves a little every frame, so the colors flow like LEDs (see Anim-Key)
+$script:RainPhase = 0
+function Hue-Rgb([double]$h) {
+  $h = (($h % 360) + 360) % 360; $x = 1 - [Math]::Abs((($h / 60) % 2) - 1)
+  switch ([int][Math]::Floor($h / 60)) { 0 { $r = 1; $g = $x; $b = 0 } 1 { $r = $x; $g = 1; $b = 0 } 2 { $r = 0; $g = 1; $b = $x } 3 { $r = 0; $g = $x; $b = 1 } 4 { $r = $x; $g = 0; $b = 1 } default { $r = 1; $g = 0; $b = $x } }
+  return ('{0};{1};{2}' -f [int]($r * 255), [int]($g * 255), [int]($b * 255))
+}
 # v2.30: the languages the interface knows; each one is a JSON file in langs/.
 $Langs = @('en', 'es', 'fr', 'de', 'pt', 'it', 'tr')
 $LangBase = if ($env:OC_LANG_BASE) { $env:OC_LANG_BASE } else { 'https://raw.githubusercontent.com/jeko1107/opencode-infinite/main/langs' }
@@ -5184,18 +5191,20 @@ function Panel([string]$s) {
   $p = $esc + '[' + $script:Theme.Panel + 'm'
   return $p + $s.Replace($esc + '[0m', $esc + '[0m' + $p) + $esc + '[0m'
 }
-# rainbow theme: each letter takes the next color of the cycle, spaces are left alone
+# rainbow theme: each letter takes the next hue of a moving gradient, spaces are left alone
 function Rainbow([string]$t) {
-  $cs = @('91', '93', '92', '96', '94', '95'); $o = ''; $i = 0
-  foreach ($c in $t.ToCharArray()) { if ($c -eq ' ') { $o += ' ' } else { $o += $esc + '[' + $cs[$i % 6] + 'm' + $c; $i++ } }
+  $o = ''; $i = 0
+  foreach ($c in $t.ToCharArray()) { if ($c -eq ' ') { $o += ' ' } else { $o += $esc + '[38;2;' + (Hue-Rgb ($script:RainPhase * 8 + $i * 28)) + 'm' + $c; $i++ } }
   return $o + $esc + '[0m'
 }
+# the selected row and the borders take one moving hue (rainbow only)
+function SelStyle { if ($script:Theme.Rainbow) { return '30;48;2;' + (Hue-Rgb ($script:RainPhase * 8 + 180)) } return $script:Theme.Sel }
 function P($style, [string]$t) {
   if ($script:Color -and $style -eq 'rainbow') { return Rainbow $t }
   if ($script:Color -and $style) { return $esc + '[' + $style + 'm' + $t + $esc + '[0m' } return $t
 }
 function Style($name) {
-  switch ($name) { 'ok' { '32' } 'err' { '31' } 'warn' { '33' } 'title' { if ($script:Theme.Rainbow) { 'rainbow' } else { $script:Theme.Title } } 'accent' { if ($script:Theme.Rainbow) { 'rainbow' } else { $script:Theme.Accent } }'dim' { '90' } 'border' { $script:Theme.Border } default { '' } }
+  switch ($name) { 'ok' { '32' } 'err' { '31' } 'warn' { '33' } 'title' { if ($script:Theme.Rainbow) { 'rainbow' } else { $script:Theme.Title } } 'accent' { if ($script:Theme.Rainbow) { 'rainbow' } else { $script:Theme.Accent } }'dim' { '90' } 'border' { if ($script:Theme.Rainbow) { '38;2;' + (Hue-Rgb ($script:RainPhase * 8)) } else { $script:Theme.Border } } default { '' } }
 }
 function W([string]$s) { [Console]::Write($s) }
 function WL([string]$s = '') {
@@ -5307,7 +5316,7 @@ function Wait-Key { WL ''; WL (P (Style 'dim') (T 'Press any key to continue...'
 function Show-Menu([string]$title, $items, $footer = $null, $head = $null, [int]$start = 0, [bool]$banner = $false, [bool]$inline = $false) {
   $i = $start
   if ($i -ge $items.Count) { $i = 0 }
-  $top = -1
+  $top = -1; $frame = -1
   while ($true) {
     $buf = New-Object 'Collections.Generic.List[string]'
     $fullVal = ''
@@ -5325,7 +5334,7 @@ function Show-Menu([string]$title, $items, $footer = $null, $head = $null, [int]
       if ($val.Length -gt $room - 1) { if ($n -eq $i) { $fullVal = $val }; $val = $val.Substring(0, [Math]::Max(0, $room - 2)) + '..' }
       $gap = ' ' * [Math]::Max(1, $in - (Disp-W $lab) - (Disp-W $val))
       if ($n -eq $i) {
-        $buf.Add((Panel ((P (Style 'border') $script:I.v) + ' ' + (P $script:Theme.Sel (Pad ($lab + $gap + $val) $in)) + ' ' + (P (Style 'border') $script:I.v))))
+        $buf.Add((Panel ((P (Style 'border') $script:I.v) + ' ' + (P (SelStyle) (Pad ($lab + $gap + $val) $in)) + ' ' + (P (Style 'border') $script:I.v))))
       } else {
         $st = if ($it.D) { Style 'dim' } else { '' }
         $vs = if ($it.S) { Style $it.S } else { Style 'accent' }
@@ -5345,17 +5354,24 @@ function Show-Menu([string]$title, $items, $footer = $null, $head = $null, [int]
     }
     $buf.Add((P (Style 'dim') (Pad ('arrows' + (T ' move   Enter select   Esc back   1-9 or letter jump')) ($script:Width - 1))))
     foreach ($f in @($footer)) { if ($f) { foreach ($fl in (Wrap-Text (T ([string]$f)) ($script:Width - 1) 3)) { $buf.Add((Panel (P (Style 'dim') (Pad $fl ($script:Width - 1))))) } } }
-    if ($inline) {
+    # rainbow redraws in place, one frame per color step; the other themes draw once per key
+    $anim = [bool]($script:Theme.Rainbow -and $script:Color -and -not $Scripted)
+    if ($anim -and $frame -ge 0) { try { [Console]::SetCursorPosition(0, $frame) } catch { } }
+    elseif ($inline) {
       # drawn under the text already on screen and redrawn in place
       if ($top -ge 0) { try { [Console]::SetCursorPosition(0, $top) } catch { } }
     } else { Clear-Screen }
+    if ($anim -and $frame -lt 0) { try { $frame = [Console]::CursorTop } catch { $frame = -1 } }
     if ($script:VPad -and -not $inline) {
       $vp = [Math]::Max(0, [int](($script:TermH - $buf.Count - 1) / 2))
       for ($q = 0; $q -lt $vp; $q++) { WL '' }
     }
-    foreach ($line in $buf) { WL $line }
+    $eol = if ($anim) { $esc + '[K' } else { '' }
+    foreach ($line in $buf) { WL ($line + $eol) }
+    if ($anim) { W ($esc + '[J') }
     if ($inline) { try { $top = [Math]::Max(0, [Console]::CursorTop - $buf.Count) } catch { $top = -1 } }
-    $k = Get-Key
+    if ($anim) { $k = Anim-Key } else { $k = Get-Key }
+    if ($null -eq $k) { continue }
     switch -Regex ($k) {
       '^Up$' { do { $i = ($i - 1 + $items.Count) % $items.Count } while ($items[$i].D -and $items.Count -gt 1); continue }
       '^Down$' { do { $i = ($i + 1) % $items.Count } while ($items[$i].D -and $items.Count -gt 1); continue }
@@ -5367,6 +5383,13 @@ function Show-Menu([string]$title, $items, $footer = $null, $head = $null, [int]
       default { for ($q = 0; $q -lt $items.Count; $q++) { if ($items[$q].K -and ([string]$items[$q].K -ieq $k) -and -not $items[$q].D) { return $q } } }
     }
   }
+}
+# rainbow wait: about 90 ms per frame; no key in that time advances the colors and returns nothing
+function Anim-Key {
+  $dl = (Get-Date).AddMilliseconds(90)
+  while ((Get-Date) -lt $dl) { if ([Console]::KeyAvailable) { return Get-Key }; Start-Sleep -Milliseconds 15 }
+  $script:RainPhase++
+  return $null
 }
 function Confirm-Box([string]$question, [string[]]$lines = @()) {
   $head = @()
@@ -6332,7 +6355,7 @@ function Menu-Main {
     @{ L = ($script:I.back + ' Back'); C = 10; H = 'Return to the home screen.' },
     @{ L = ($script:I.err + ' Exit'); C = 6; H = 'Close the launcher.' })
   $head = Header-Lines
-  $r = Show-Menu 'OpenCode' $items ('v2.33   ' + $Repo) $head 0
+  $r = Show-Menu 'OpenCode' $items ('v2.34   ' + $Repo) $head 0
   if ($r -eq -1) { exit 10 }
   exit $items[$r].C
 }
@@ -6450,7 +6473,7 @@ function Home-Loop {
       $head += ''
     }
     if ($script:Notice) { $head += (P (Style $script:Notice[0]) ($script:I.warn + ' ' + (T $script:Notice[1]))); $head += ''; $script:Notice = $null }
-    $r = Show-Menu 'Main menu' $items ('v2.33   ' + $Self) $head $pos $true
+    $r = Show-Menu 'Main menu' $items ('v2.34   ' + $Self) $head $pos $true
     if ($r -eq -1) { continue }
     $pos = $r
     Log ('home -> ' + $acts[$r])
