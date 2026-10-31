@@ -5115,6 +5115,10 @@ function Update-Lang([string]$lg, [string]$file) {
     [IO.File]::WriteAllText($fail, (Get-Date).ToString('s'))
   }
 }
+function Strip-Icon([string]$s) {
+  foreach ($ic in $script:IconList) { if ($ic -and $s.StartsWith($ic + ' ')) { return $s.Substring($ic.Length + 1) } }
+  return $s
+}
 function T([string]$s) {
   if (-not $s -or $script:Lang -eq 'en') { return $s }
   if ($script:Tr.ContainsKey($s)) { return $script:Tr[$s] }
@@ -5252,12 +5256,11 @@ function Get-Banner {
     '|___||_| \_||_|    |___||_| \_||___|  |_|  |_____|      ')
   $styles = @('1;96', '96', '36', '36', '34', '1;94', '1;96', '96', '36', '36', '34', '1;94', '1;96', '96', '36', '36', '34', '1;94')
   $w = 0; foreach ($a in $art) { if ($a.Length -gt $w) { $w = $a.Length } }
-  $pad = [Math]::Max(0, [int](($script:Width - $w) / 2))
+  $pad = 0
   $lead = ' ' * $pad
   $out = @()
   for ($r = 0; $r -lt $art.Count; $r++) { $out += (P $styles[$r % $styles.Count] ($lead + $art[$r])) }
-  # the URL centers on the art block, not on its own length, so it sits under the logo
-  $out += (P (Style 'accent') ($lead + (' ' * [Math]::Max(0, [int](($w - $Repo.Length) / 2))) + $Repo))
+  $out += (P (Style 'accent') ($lead + $Repo))
   return $out
 }
 
@@ -5310,13 +5313,13 @@ function Show-Menu([string]$title, $items, $footer = $null, $head = $null, [int]
     $fullVal = ''
     if ($banner) { foreach ($b in (Get-Banner)) { $buf.Add($b) }; $buf.Add('') }
     if ($head) { foreach ($h in $head) { $buf.Add([string]$h) } }
-    $buf.Add((Box-Top (T $title)))
+    $buf.Add((Box-Top (T (Strip-Icon $title))))
     $in = $script:Width - 4
     for ($n = 0; $n -lt $items.Count; $n++) {
       $it = $items[$n]
-      $num = if ($n -lt 9) { [string]($n + 1) } else { ' ' }
-      $mark = if ($n -eq $i) { $script:I.sel } else { ' ' }
-      $lab = $mark + ' ' + $num + '  ' + (T ([string]$it.L))
+      $num = ([string]($n + 1) + '.').PadRight(3)
+      $mark = if ($n -eq $i) { '>' } else { ' ' }
+      $lab = $mark + ' ' + $num + ' ' + (T (Strip-Icon ([string]$it.L)))
       $val = T ([string]$it.V)
       $room = $in - $lab.Length - 1
       if ($val.Length -gt $room - 1) { if ($n -eq $i) { $fullVal = $val }; $val = $val.Substring(0, [Math]::Max(0, $room - 2)) + '..' }
@@ -5340,7 +5343,7 @@ function Show-Menu([string]$title, $items, $footer = $null, $head = $null, [int]
         $buf.Add((P (Style 'accent') (Pad ($pre + $dl[$q]) ($script:Width - 1))))
       } else { $buf.Add((' ' * ($script:Width - 1))) }
     }
-    $buf.Add((P (Style 'dim') (Pad ($script:I.up + '/' + $script:I.down + (T ' move   Enter select   Esc back   1-9 or letter jump')) ($script:Width - 1))))
+    $buf.Add((P (Style 'dim') (Pad ('arrows' + (T ' move   Enter select   Esc back   1-9 or letter jump')) ($script:Width - 1))))
     foreach ($f in @($footer)) { if ($f) { foreach ($fl in (Wrap-Text (T ([string]$f)) ($script:Width - 1) 3)) { $buf.Add((Panel (P (Style 'dim') (Pad $fl ($script:Width - 1))))) } } }
     if ($inline) {
       # drawn under the text already on screen and redrawn in place
@@ -5468,7 +5471,41 @@ function Get-WtPaths {
 }
 # $block is the text of the font entry ("font": { ... }) or $null to remove it. Returns the font text that
 # was there before ('' when none) so a later reset can put it back, or $false when the file was not edited.
-function Edit-WtFile([string]$path, $block) {
+# keeps the face of an existing font entry when only the size is changed
+function Merge-FontFace($block, [string]$existing) {
+  if (-not $block -or $block -match '"face"' -or $existing -notmatch '"face"\s*:\s*"[^"]*"') { return $block }
+  return ($block -replace '^"font"\s*:\s*\{\s*', ('"font": { ' + [regex]::Match($existing, '"face"\s*:\s*"[^"]*"').Value + ', '))
+}
+# The font of the profile this tab runs (WT_PROFILE_ID). A profile's own font wins over profiles.defaults.
+# Returns @(text, prior font text) or $null when that profile is not in profiles.list.
+function Set-ProfFont([string]$text, [string]$guid, $block) {
+  $gm = [regex]::Match($text, '"guid"\s*:\s*"' + [regex]::Escape($guid) + '"', 'IgnoreCase')
+  if (-not $gm.Success) { return $null }
+  $open = -1; $depth = 0
+  for ($i = $gm.Index; $i -ge 0 -and $open -lt 0; $i--) {
+    if ($text[$i] -eq '}') { $depth++ } elseif ($text[$i] -eq '{') { if ($depth -eq 0) { $open = $i } else { $depth-- } }
+  }
+  if ($open -lt 0) { return $null }
+  $close = -1; $depth = 0
+  for ($i = $open; $i -lt $text.Length -and $close -lt 0; $i++) {
+    if ($text[$i] -eq '{') { $depth++ } elseif ($text[$i] -eq '}') { $depth--; if ($depth -eq 0) { $close = $i } }
+  }
+  if ($close -lt 0) { return $null }
+  $obj = $text.Substring($open, $close - $open + 1)
+  $fontRe = '"font"\s*:\s*\{[^{}]*\}'
+  $fm = [regex]::Match($obj, $fontRe)
+  $prior = ''
+  if ($fm.Success) {
+    $prior = $fm.Value
+    if ($block) { $obj = $obj.Remove($fm.Index, $fm.Length).Insert($fm.Index, (Merge-FontFace $block $prior)) }
+    elseif ($obj -match (',\s*' + $fontRe)) { $obj = [regex]::Replace($obj, ',\s*' + $fontRe, '', 'None', 1) }
+    else { $obj = [regex]::Replace($obj, $fontRe + '\s*,?', '', 'None', 1) }
+  } elseif ($block) {
+    $obj = '{' + "`r`n            " + $block + ',' + $obj.Substring(1)
+  }
+  return @(($text.Substring(0, $open) + $obj + $text.Substring($close + 1)), $prior)
+}
+function Edit-WtFile([string]$path, $block, [bool]$pTouch = $false, $pblock = $null) {
   $bytes = [IO.File]::ReadAllBytes($path)
   $bom = ($bytes.Length -ge 3 -and $bytes[0] -eq 0xEF -and $bytes[1] -eq 0xBB -and $bytes[2] -eq 0xBF)
   $text = [Text.Encoding]::UTF8.GetString($bytes)
@@ -5481,6 +5518,7 @@ function Edit-WtFile([string]$path, $block) {
     $body = $m.Groups[2].Value
     $fm = [regex]::Match($body, $fontRe)
     if ($fm.Success) { $prior = $fm.Value; $body = $body.Remove($fm.Index, $fm.Length); $body = [regex]::Replace($body, '^(\s*),', '$1', 'Singleline') }
+    $block = Merge-FontFace $block $prior
     if ($block) {
       $sep = $(if ($body.Trim()) { ',' } else { '' })
       $nl = $(if ($text.Contains("`r`n")) { "`r`n" } else { "`n" })
@@ -5494,12 +5532,18 @@ function Edit-WtFile([string]$path, $block) {
     if (-not $pm.Success -or -not $block) { return $false }
     $new = $text.Insert($pm.Index + $pm.Length, "`r`n    ""defaults"": { " + $block + " },")
   }
+  $script:ProfFound = $false; $script:ProfPrior = ''
+  if ($pTouch -and $env:WT_PROFILE_ID) {
+    $pr = Set-ProfFont $new $env:WT_PROFILE_ID $pblock
+    if ($pr) { $new = $pr[0]; $script:ProfFound = $true; $script:ProfPrior = $pr[1] }
+  }
   if ($new -eq $text) { return $prior }
   # the result must still be valid and must say what we meant
   try {
     $j = (Strip-Jsonc $new) | ConvertFrom-Json
     $got = $j.profiles.defaults.font
     if ($block) { if (-not $got) { return $false } } elseif ($got -and -not $prior) { return $false }
+    if ($script:ProfFound -and $pblock) { $pp = @($j.profiles.list | Where-Object { $_.guid -eq $env:WT_PROFILE_ID }); if ($pp.Count -and -not $pp[0].font) { return $false } }
   } catch { return $false }
   $out = [Text.Encoding]::UTF8.GetBytes($new)
   if ($bom) { $out = [byte[]](0xEF, 0xBB, 0xBF) + $out }
@@ -5521,11 +5565,14 @@ function Apply-WtFont([string]$face, [int]$size) {
     New-Item -ItemType Directory -Force -Path $BackDir | Out-Null
     $bk = Join-Path $BackDir ('wt-settings-' + (Get-Date -Format 'yyyyMMdd-HHmmss') + '-' + $done + '.json')
     Copy-Item -LiteralPath $p -Destination $bk -Force
-    $prior = Edit-WtFile $p $entry
+    $pentry = $entry
+    if ($restore) { $pentry = [string]$script:Cfg.font.wt[$key].pprior; if (-not $pentry) { $pentry = $null } }
+    $ptouch = if ($restore) { [bool]$script:Cfg.font.wt[$key].ptouched } else { $true }
+    $prior = Edit-WtFile $p $entry $ptouch $pentry
     if ($prior -is [bool] -and -not $prior) { Remove-Item -LiteralPath $bk -Force -ErrorAction SilentlyContinue; return @('err', 'settings.json was left untouched: the edit would not have kept it valid.') }
     if ($restore) { [void]$script:Cfg.font.wt.Remove($key) }
     else {
-      if (-not $script:Cfg.font.wt.ContainsKey($key)) { $script:Cfg.font.wt[$key] = @{ prior = [string]$prior; backup = $bk } }
+      if (-not $script:Cfg.font.wt.ContainsKey($key)) { $script:Cfg.font.wt[$key] = @{ prior = [string]$prior; backup = $bk; ptouched = [bool]$script:ProfFound; pprior = [string]$script:ProfPrior } }
       $script:Cfg.font.wt[$key].face = $face
     }
     $done++
@@ -5668,14 +5715,13 @@ function Group-Menu([string]$group) {
   while ($true) {
     $items = @()
     foreach ($s in $list) {
-      $mod = if ($script:Cfg.settings.ContainsKey($s.Key)) { '*' } else { ' ' }
-      $items += @{ L = ($mod + ' ' + $s.Label); V = (Format-Val $s); S = $(if ($mod -eq '*') { 'warn' } else { 'accent' }); H = (Describe-Setting $s) }
+      $items += @{ L = $s.Label; V = (Format-Val $s); S = $(if ($script:Cfg.settings.ContainsKey($s.Key)) { 'warn' } else { 'accent' }); H = (Describe-Setting $s) }
     }
     if ($group -eq 'Shortcuts') { $items += Shortcut-Info }
     $backAt = $items.Count
     $items += @{ L = ($script:I.back + ' Back'); H = 'Return to the settings groups.' }
     $head = @(); if ($msg) { $head += $msg; $head += '' }
-    $r = Show-Menu ($script:I.gear + ' ' + (T 'Settings') + ' - ' + (T $group)) $items '* = changed from the default. Enter edits or toggles the selected value.' $head $pos
+    $r = Show-Menu ((T 'Settings') + ' - ' + (T $group)) $items 'Changed values are yellow. Enter edits or toggles the selected value.' $head $pos
     if ($r -eq -1 -or $r -eq $backAt) { return }
     $pos = $r
     if ($r -ge $list.Count) { continue }
