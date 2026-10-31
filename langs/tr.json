@@ -681,5 +681,13 @@
   " Renew session": " Oturumu yenile",
   " Uninstall": " Kaldır",
   " Support report": " Destek raporu",
-  "not a url": "bir URL değil"
+  "not a url": "bir URL değil",
+  "Sessions": "Oturumlar",
+  "Pick a chat from this folder and continue it. CLI only.": "Bu klasördeki bir sohbeti seçip devam et. Yalnızca CLI.",
+  "The desktop app has no session list. Switch to CLI to pick a chat.": "Masaüstü uygulamasında oturum listesi yok. Sohbet seçmek için CLI'a geç.",
+  "Could not read the sessions: {0}": "Oturumlar okunamadı: {0}",
+  "No sessions in this folder yet.": "Bu klasörde henüz oturum yok.",
+  "Untitled session": "Başlıksız oturum",
+  "Sessions in this folder": "Bu klasördeki oturumlar",
+  "  [9] Sessions      - continue a chat from this folder": "  [9] Oturumlar      - bu klasördeki bir sohbete devam et"
 }

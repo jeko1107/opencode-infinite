@@ -681,5 +681,13 @@
   " Renew session": " Renovar sesión",
   " Uninstall": " Desinstalar",
   " Support report": " Informe de soporte",
-  "not a url": "no es una URL"
+  "not a url": "no es una URL",
+  "Sessions": "Sesiones",
+  "Pick a chat from this folder and continue it. CLI only.": "Elige un chat de esta carpeta y continúalo. Solo CLI.",
+  "The desktop app has no session list. Switch to CLI to pick a chat.": "La app de escritorio no tiene lista de sesiones. Cambia a CLI para elegir un chat.",
+  "Could not read the sessions: {0}": "No se pudieron leer las sesiones: {0}",
+  "No sessions in this folder yet.": "Todavía no hay sesiones en esta carpeta.",
+  "Untitled session": "Sesión sin título",
+  "Sessions in this folder": "Sesiones de esta carpeta",
+  "  [9] Sessions      - continue a chat from this folder": "  [9] Sesiones      - continúa un chat de esta carpeta"
 }

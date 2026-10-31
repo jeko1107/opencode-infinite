@@ -1,4 +1,4 @@
-# OpenCode Infinite - launcher handbook (v2.30)
+# OpenCode Infinite - launcher handbook (v2.32)
 
 A single-file Windows batch launcher for OpenCode that adds multi-egress
 (Cloudflare WARP, Tor, free/custom HTTP proxy lists, or direct), dependency
@@ -148,6 +148,14 @@ Install fallback:
 > official standalone build from opencode.ai (x64, arm64 or x64-baseline),
 > sha256-verified -> if that fails and npm is present, `npm install -g @opencode/cli`
 > (32-bit Windows: `opencode-ai` via 32-bit node, the only build it has)
+
+### NEW in v2.32 - Sessions, saved run mode, update opt-out, rainbow theme
+
+- **Sessions** (main menu, CLI only): pick a chat from this folder and continue it (`opencode --session`).
+- **Run mode is respected by the shortcut and the `opencode` command.** The mode chosen at setup (or in Settings, Connection, Run mode) is used. Ask every time still opens CLI there.
+- **Update prompts can be turned off:** answer "No, never ask about updates", or set Settings, Updates, Update prompts to `never`. Then no update checks run for the launcher, opencode or the desktop app.
+- **Rainbow color theme** (Settings, Appearance).
+- **Fix:** closing the window with X could block the next start for up to 2 hours. A lock whose owner is gone is now released after about a minute.
 
 ### NEW in v2.31 - keys, settings, languages
 
