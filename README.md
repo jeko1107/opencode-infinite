@@ -8,7 +8,6 @@ gets a new IP and resumes the same chat.
 - **Windows:** 10 and 11, x64, ARM64, and 32-bit (x86, limited: no WARP and no desktop app).
 - **Admin:** only for the optional WARP install (UAC). Everything else runs as your user.
 
-![Language picker](images/01-language.png)
 
 ---
 
@@ -216,7 +215,7 @@ Main settings and their defaults:
 ---
 
 ## 9. Languages
-
+![Language picker](images/01-language.png)
 Pick the language in **Settings, Appearance, Language**. The list has
 `Automatic` (follows Windows), English, Español, Français, Deutsch, Português,
 Italiano and Türkçe.
