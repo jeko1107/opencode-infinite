@@ -1,704 +1,352 @@
-# OpenCode Infinite - launcher handbook (v2.32)
+# OpenCode Infinite
 
-A single-file Windows batch launcher for OpenCode that adds multi-egress
-(Cloudflare WARP, Tor, free/custom HTTP proxy lists, or direct), dependency
-bootstrap, changed-IP auto-resume, watching of fatal errors, an UPD
-self-updater and a one-click updater bootstrap.
+A single-file Windows launcher for [OpenCode](https://opencode.ai). It starts
+OpenCode through a different exit IP, installs what is missing, and when a
+free-tier limit stops your chat, it gets a new IP and resumes the same chat.
 
- - File: `OpenCode Infinite.bat`
- - Target: Windows 10 / 11, **x64, ARM64, and x86 (32-bit) via npm + 32-bit node**
- - Admin required: only for optional installs (WARP MSI / node MSI). Everything
-  else runs user-mode, no registry, no services, no scheduled tasks.
+![Home screen](docs/home-screen.svg)
 
----
+![Main menu](docs/main-menu.svg)
 
-## 1. What problem it solves
+> The two images above are drawn from the launcher's own menu text, not
+> photos of a real screen.
 
-Free-tier AI endpoints rate-limit **per egress IP** and **per session context**.
-The launcher handles that:
-
-1. launches OpenCode with the WARP proxy attached, so the provider sees
-   Cloudflare's exit IP instead of yours;
-2. on a bad run end (quota line in log, crash, Ctrl+C) it drops the WARP
-   registration and requests a new one - which yields a different exit IP -
-   then reopens the same session, no input;
-3. probes every candidate IP with one cheap message on a throwaway session, so
-   burned IPs are skipped (hunt can be unlimited with `IP_FIND_MAX=0`).
-
-It also installs what it needs (WARP, OpenCode, 32-bit node) so it can start
-from a bare machine.
+- **File:** `OpenCode Infinite.bat` (one file, no installer, no services)
+- **Windows:** 10 and 11, x64, ARM64, and 32-bit (x86, limited, see below)
+- **Admin:** only for the optional WARP install (UAC). Everything else runs as
+  your user.
 
 ---
 
-## 2. One-command install
+## Contents
 
-**PowerShell / Windows Terminal (recommended, single shell - no nested
-PowerShell, no arg-passing quoting pitfalls):**
+1. [What it does](#1-what-it-does)
+2. [Install](#2-install)
+3. [First run](#3-first-run)
+4. [Menus](#4-menus)
+5. [Connection modes](#5-connection-modes)
+6. [Automatic IP hunt](#6-automatic-ip-hunt)
+7. [Deep reset and restore](#7-deep-reset-and-restore)
+8. [Settings](#8-settings)
+9. [Languages](#9-languages)
+10. [Keys and commands](#10-keys-and-commands)
+11. [Updates](#11-updates)
+12. [Files and folders](#12-files-and-folders)
+13. [Troubleshooting](#13-troubleshooting)
+14. [Verify the file](#14-verify-the-file)
+
+---
+
+## 1. What it does
+
+Free-tier AI endpoints limit usage per IP address and per chat. The launcher:
+
+1. starts OpenCode with an egress (Cloudflare WARP, Tor, a proxy list, or your
+   direct connection), so the provider sees that exit IP;
+2. when a limit or a dead chat is detected in the OpenCode log, it stops the
+   OpenCode window, gets a new IP, and resumes the chat with `continue`;
+3. can probe each new IP with one cheap message on a throwaway session, so
+   IPs that are already burned are skipped;
+4. installs what is missing (WARP, OpenCode, Tor, 32-bit Node.js) with a size
+   check and a SHA-256 check on every download.
+
+Nothing is installed silently. Every install asks first, and UAC is shown to
+you.
+
+---
+
+## 2. Install
+
+**PowerShell or Windows Terminal (recommended):**
 
 ```powershell
 [Net.ServicePointManager]::SecurityProtocol='Tls12'; iwr https://github.com/jeko1107/opencode-infinite/releases/latest/download/OpenCode-Infinite.bat -UseBasicParsing -OutFile "$env:TEMP\oci.bat"; Copy-Item "$env:TEMP\oci.bat" "$env:USERPROFILE\Desktop\OpenCode Infinite.bat" -Force; & "$env:TEMP\oci.bat"
 ```
 
-**cmd (classic shell):** `curl.exe` ships with Windows 10 1803+ and Windows 11,
-so this is one line whole:
+**cmd (`curl.exe` ships with Windows 10 1803 and later):**
 
 ```cmd
 curl.exe -f -L https://github.com/jeko1107/opencode-infinite/releases/latest/download/OpenCode-Infinite.bat -o "%USERPROFILE%\Desktop\OpenCode Infinite.bat" && "%USERPROFILE%\Desktop\OpenCode Infinite.bat"
 ```
 
-After the first run, the launcher verifies itself against the repo on every
-start: if a newer copy is live on `main`, it says so and, with your approval,
-backs itself up and swaps in the new version on a harmless restart - no laps
-to keep provoking your memory.
-
-**If a machine runs an OLD version (no [upd] block):** in the same folder, run
-the repo companion file `Update launcher.bat`; it downloads the asset of the
-**latest GitHub Release** (`OpenCode-Infinite.bat`) and replaces the old copy
-(Beside, Desktop, or OneDrive-Desktop, first hit) with it. If the Release is not
-reachable it falls back to the commit-pinned copy on `main`.
+**Old copy?** Run `Update launcher.bat` from the repository in the same folder.
+It downloads the latest release and replaces the old copy.
 
 ---
 
-## 3. Quick start in the launcher
+## 3. First run
 
-| How you start it | What happens |
+1. Double-click `OpenCode Infinite.bat`.
+2. Pick **CLI** (the terminal interface) or **Desktop** (the OpenCode app).
+3. Pick the egress mode (section 5). If WARP or OpenCode is missing, the
+   launcher offers to install it.
+4. Pick a folder to work in (CLI only). Dragging a folder onto the `.bat`, or
+   passing the path as an argument, skips this step.
+5. The main menu opens. Choose **1 New IP and start OpenCode**.
+
+Use **Connect with opencode** on the home screen once. It creates the
+`opencode` command, the shortcuts, and the terminal commands (section 10), so
+you can start OpenCode through the same connection without the launcher menus.
+
+---
+
+## 4. Menus
+
+**Home screen**
+
+| Option | What it does |
 |---|---|
-| Double-click | Mode menu (CLI / Desktop), folder menu (CLI only), egress menu, then the main menu |
-| Drag a folder onto the `.bat` | Jumps straight into that folder |
-| `OpenCode Infinite.bat "D:\work\project"` | Same, from a shell |
-| `OpenCode Infinite.bat \\server\share` | UNC paths work (`pushd`, not `cd /d`) |
+| Launch OpenCode | Pick a folder and a connection, then start the CLI or the desktop app |
+| Connect with opencode | Guided setup. Creates the `opencode` command and shortcuts. Shows "Configured" once done |
+| Renew session | Closes OpenCode, saves and clears the saved tokens, and gets a new IP. Use it when the limit is hit or the login expired |
+| Uninstall | Removes only what setup added (command, shortcuts, PATH entry) and restores the settings it changed. Asks first |
+| Settings | Every launcher option, grouped (section 8) |
+| Support report | Collects versions, settings and the recent log into one text file. Passwords, tokens and your user name are removed. IPs are masked by default |
+| Exit | Closes the launcher |
 
-If neither WARP nor OpenCode are installed, the script offers both fetches.
-Nothing is installed silently (the UAC prompt is user-visible and once-only).
+**Main menu** (shown after you start from Launch OpenCode)
 
----
-
-## 4. Files the launcher uses (all paths env-based, no hardcoded users)
-
-| Path | Purpose | Written by |
+| Key | Option | What it does |
 |---|---|---|
-| `%USERPROFILE%\.local\share\opencode\` | OpenCode data dir | OpenCode |
-| `%LOCALAPPDATA%\opencode-launcher\` | lastfolder, lastip, wcli.log, startup.log, backups | launcher |
-| `%LOCALAPPDATA%\opencode\bin\opencode.exe` | standalone OpenCode install | launcher |
-| `%ProgramFiles%\nodejs\` (winget or pinned x86 MSI) | node.js that the npm route runs on | launcher install |
-| `%USERPROFILE%\Desktop\opencode_chats_archiviate\<stamp>\` | deep-reset archive | launcher |
-| `%TEMP%\Cloudflare_WARP_x64.msi`, `%TEMP%\node_x86.msi` | installer scratch, deleted after use | launcher |
-| `%STATE_DIR%\lock\` | single-instance JIT | launcher |
+| `1` | New IP and start OpenCode | Gets a new IP or proxy, then opens OpenCode. Chats stay as they are |
+| `2` | Clear tokens and cache, then start | Kills OpenCode, saves the login file to the Desktop, clears the cache, then opens OpenCode. Chats stay where they are |
+| `3` | Change IP (test) | Rotates the connection only, without opening OpenCode |
+| `4` | Deep reset or restore chats | Submenu, section 7 |
+| `5` | Mode (CLI or Desktop) | Switches between the terminal and the desktop app |
+| `6` | Back | Returns to the home screen |
+| `7` | Exit | Closes the launcher |
 
-No `C:\Users\<name>` strings live anywhere in the file; everything routes via
-environment variables, which is what keeps it universal.
+Inside every menu, `Esc` goes back. `Ctrl+C` quits the launcher.
 
 ---
 
-## 5. The main menu
+## 5. Connection modes
 
-| Key | Option | What it touches |
+The egress is chosen once per start.
+
+| Mode | How it works | Notes |
 |---|---|---|
-| `[1]` | Fresh start | new IP (ensure-different) + open a new session |
-| `[2]` | Continue | same IP, same session |
-| `[3]` | Change IP | rotates the current egress: WARP exit IP, TOR fresh circuit, PROXY next candidate; mode NONE has nothing to rotate |
-| `[4]` | Folder (CLI) / Mode (Desktop) | CLI: change working folder. Desktop: switch between CLI and Desktop |
-| `[5]` | Deep reset | kill OpenCode, archive chats to the Desktop, clear tokens, fresh session |
-| `[6]` | Exit | closes the lock and leaves |
+| **WARP** | Cloudflare WARP local proxy. A new IP is a new WARP registration | Rotation supported. Needs WARP (installed on request) |
+| **TOR** | Portable Tor (Tor Browser's expert bundle) plus a built-in HTTP bridge on `127.0.0.1:8118` | No Privoxy needed. A Tor that is already running (Tor Browser on 9150, or 9050) is used as it is and never closed by the launcher |
+| **PROXY** | Free HTTP proxies from a list (default: ProxyScrape). Dead ones are skipped | Use your own list with `PROXY_LIST_URL` (URL or local file; plain text, CSV, JSON, XML or HTML) |
+| **NONE** | Direct connection, no proxy | Nothing to rotate |
 
-The very first menu picks **CLI** (terminal TUI) or **Desktop** (the OpenCode
-desktop app). The main menu header shows the active `Mode`.
+The proxy settings apply only to the OpenCode process tree. The rest of your
+system (browser, other apps) stays direct.
 
-Before the main menu appears, the launcher asks the **egress mode** once:
-`[1] WARP`, `[2] TOR`, `[3] PROXY`, `[4] NONE` - the proxy lives only in
-the opencode process environment, system traffic stays direct.
-
-After **any** run exit, the launcher checks the log and, if this IP is dead:
-rotates and reopens the session automatically. The rotation is a hunt for an IP
-that matches your target (see v2.30). `Esc` or `Q` stops the hunt and returns to
-the menu; `Ctrl+C` quits the launcher.
+**32-bit Windows (x86):** WARP and the desktop app are not available. OpenCode
+runs through npm with a 32-bit Node.js.
 
 ---
 
-## 6. Dependency bootstrap
+## 6. Automatic IP hunt
 
-### WARP (optional)
+When a chat hits a limit, the launcher hunts for a new IP:
 
-Search order in `:find_warp`:
-
-1. `where warp-cli.exe`
-2. `%ProgramFiles%\Cloudflare\Cloudflare WARP\`
-3. `%ProgramFiles(x86)%\Cloudflare\Cloudflare WARP\`
-4. `%ProgramW6432%\Cloudflare\Cloudflare WARP\`
-5. `%LOCALAPPDATA%\Cloudflare\Cloudflare WARP\`
-
-WARP install (`:install_warp`) downloads 64-bit MSI from
-`downloads.cloudflareclient.com`, size gate 5 MB, silent install with UAC.
-**x86 note:** WARP publishes 64-bit only; on real 32-bit Windows the rotation
-is disabled but everything else runs from the direct connection.
-
-### OpenCode (any install shape)
-
-Search order in `:find_opencode` - all candidates are versioned and the
-newest WIN (old v1-vs-v2 database mismatch reported instead of failing):
-
-1. PATH lookup (opencode.exe / .cmd / .bat)
-2. `%APPDATA%\npm\opencode.cmd` - npm shim
-3. `%LOCALAPPDATA%\Programs\opencode\opencode.exe`
-4. `%LOCALAPPDATA%\opencode\bin\opencode.exe` - standalone install by this script
-5. `%USERPROFILE%\.opencode\bin\opencode.exe`
-
-Install fallback:
-
-> official standalone build from opencode.ai (x64, arm64 or x64-baseline),
-> sha256-verified -> if that fails and npm is present, `npm install -g @opencode/cli`
-> (32-bit Windows: `opencode-ai` via 32-bit node, the only build it has)
-
-### NEW in v2.32 - Sessions, saved run mode, update opt-out, rainbow theme
-
-- **Sessions** (main menu, CLI only): pick a chat from this folder and continue it (`opencode --session`).
-- **Run mode is respected by the shortcut and the `opencode` command.** The mode chosen at setup (or in Settings, Connection, Run mode) is used. Ask every time still opens CLI there.
-- **Update prompts can be turned off:** answer "No, never ask about updates", or set Settings, Updates, Update prompts to `never`. Then no update checks run for the launcher, opencode or the desktop app.
-- **Rainbow color theme** (Settings, Appearance).
-- **Fix:** closing the window with X could block the next start for up to 2 hours. A lock whose owner is gone is now released after about a minute.
-
-### NEW in v2.31 - keys, settings, languages
-
-- **Esc goes back, never closes.** In every menu and text prompt Esc returns to the previous screen. Ctrl+C is the only key that quits the launcher; it stops the processes it started and leaves the terminal open, with no Y/N question.
-- **Reopen the menu.** The terminal command `opencodeinf` opens the launcher menu again, as many times as needed.
-- **Original OpenCode.** The terminal command `opencodeoc` starts the OpenCode you installed before the launcher, without the launcher or the connection. Use it when the launcher breaks. Run **Connect with opencode** (setup) once to create it.
-- **Editable shortcuts.** Settings -> Shortcuts: `KEY_ROTATE` (R), `KEY_MENU` (M), `KEY_QUIT` (Q). They are one letter each and must differ. The fixed keys (Esc, arrows, Ctrl+C) and the terminal commands are listed next to them for reference.
-- **Languages.** Settings -> Language opens a list (`auto` plus 7 languages). Only the chosen language file is downloaded from the `langs/` folder of the repository. Translations: es, fr, de, pt, it, tr. The launcher's own messages (menus and the lines printed by the batch) follow the same language; logs and the support report stay in English; English is the built-in fallback.
-- **Export / import settings.** Settings -> Export writes the changed settings to one `.json` file (default: Desktop). Settings -> Import reads that file; every value is checked first, and one wrong value stops the whole import, so nothing is half changed. Unknown keys are skipped and counted.
-- **Defaults changed.** `TARGET_TRIES` is 1 (was 10). `PROBE_MODEL` is `opencode/big-pickle`. `UPDATE_CHECK` is 1: each start checks GitHub and asks Y/N before replacing an old copy in `AppData\Local`.
-- **Old copy problem.** The `opencode` command runs the copy saved at setup (`%STATE_DIR%\app`). It is replaced when the newer launcher is run by hand, or by the update check above. Before this change the check was off, so old copies stayed.
-
-Not in this release: the sessions browser (list of past sessions by project folder), a separate app for external tasks, and auto-continue for external tasks.
-
-### NEW in v2.30 - automatic IP hunt with a target, languages, one copy
-
-**Automatic IP hunt (Settings, Rotation)**
-- When the chat hits a limit, the launcher hunts for a new exit IP. The hunt
-  stops on the first IP that matches the target, or when a cap is reached.
-- Target: `TARGET_COUNTRY` (a 2-letter code, e.g. `DE`) and/or `TARGET_PREFIX`
-  (the start of an IPv4, e.g. `104.28.`). Both empty = any new IP.
-- Caps: `TARGET_TRIES` (attempts per hunt, default 10), `TARGET_MINUTES`
-  (time per hunt, default 15), `TARGET_INTERVAL` (seconds between attempts,
-  default 15).
-- `AUTO_ROTATE` = `off` turns the automatic hunt off: the menu decides. The
-  `R` choice at the closed prompt always rotates.
-- Each attempt prints its number, IP, country, whether it matches, and how
-  many attempts are left. The hunt ends with a summary: target reached, attempt
-  limit, time limit, burned-IP limit, or stopped by you.
-- `Esc` or `Q` during the wait stops the hunt and returns to the menu without
-  closing the window. `Ctrl+C` quits.
-- An IP already tried in the same hunt is skipped.
-- `ROTATE_ROUNDS` is gone: the attempt cap replaces the rounds. `IP_FIND_MAX`
-  still limits burned IPs, and the attempt cap still applies.
-
-**Languages**
-- The menus come in 7 languages: English, Español, Français, Deutsch,
-  Português, Italiano and Türkçe. Pick one in Settings, Appearance,
-  Language. `auto` follows Windows.
-- Each language is a JSON file in `langs/` (`en` is the built-in fallback).
-  The launcher also stores them inside itself, so it works offline.
-
-**Launcher and commands**
-- Setup copies the launcher to `%LOCALAPPDATA%\opencode-infinite\app\` and the `opencode`
-  and `opencodeinf` commands run that copy. A second download of the file hands
-  over to it, or replaces it when it is newer.
-- When the copy is missing, the command offers to download it again.
-- The shortcuts keep the window open at the prompt after the launcher quits.
-- A window that was opened by double-click stays open until a key is pressed.
-- Menus read keys directly, so `Ctrl+C` quits cleanly instead of asking
-  "Terminate batch job?".
-- A second instance brings the window of the first one to the front.
-- The banner URL is centered under the logo.
-
-### NEW in v2.28 - the right opencode version, any proxy list, Tor fixes
-
-- **Installs and updates the current opencode.** GitHub `releases/latest`, the
-  npm package `opencode-ai` and winget `SST.opencode` are all frozen on the old
-  v1 line (1.19.5); the current v2 (2.2.x) is published on `opencode.ai` and as
-  the npm package `@opencode/cli`. The launcher now reads the official release
-  metadata (`opencode.ai/update/api/latest/...`, version + url + sha256) for the
-  CLI zip and the desktop installer, verifies the sha256, and picks the
-  `-baseline` zip on CPUs without AVX2. winget is no longer used.
-- **Update check.** The once-per-start check compares against the official
-  version (it used to ask npm for `opencode-ai`, so it never saw v2) and works
-  for every install: an npm install is updated through npm, anything else
-  through the standalone build. It asks first and closes every opencode process
-  before replacing files.
-- **Desktop update.** In Desktop mode, once per start, the launcher reads the
-  installed version from `OpenCode.exe` and compares it with the official one
-  (`desktop` metadata on opencode.ai). When a newer one exists it asks
-  `Update now? [Y/N]`, closes every OpenCode process and runs the same verified
-  silent installer used for the first install (NSIS, per-user, no UAC), which
-  upgrades the app in place; it then shows the new version. No network or an
-  unreadable version changes nothing.
-- **npm 12 and the 229-byte stub.** npm 12 blocks the `@opencode/cli`
-  postinstall, which leaves `bin\opencode.exe` as a stub that prints
-  "postinstall script was not run". The launcher installs with
-  `--allow-scripts=@opencode/cli` and, if the exe is still the stub, runs
-  `postinstall.mjs` by hand. A line like that is no longer read as a version.
-- **Any proxy list.** `PROXY_LIST_URL` takes a URL (`http`, `https`, `ftp`,
-  `file:///`) or a local path, in any format: plain text, CSV, JSON, NDJSON,
-  XML or HTML, sorted or not, `ip:port`, `scheme://user:pass@host:port`, or ip
-  and port in separate fields or columns (port first works too). SOCKS entries
-  are skipped, `#` / `;` lines are comments, duplicates are dropped and the
-  file's order is kept. Tested on 1,580 proxies in every format (JSON, XML and
-  HTML take about 10 s to read, text and CSV about 1 s). The normalizer lives at
-  the end of the `.bat` (`#>>>OC_PLIST_PS`).
-- **Tor auto-install.** The Windows `tar.exe` is used by full path (a GNU tar
-  from Git in the PATH read `C:\...` as host:file and unpacked nothing), and the
-  dist index also accepts two-part versions, so Tor Browser 16.0 is found.
-- **Verified.** WARP proxy on `:40000` answers `warp=on`; Tor installs, starts,
-  bridges and renews its circuit (new exit IP); free proxy lists are fetched,
-  read and probed. WARP rotation was not exercised in this pass.
-
-### NEW in v2.27 - Desktop installer and wider path search
-
-- **Installs the desktop app.** In Desktop mode, when no `OpenCode.exe` is
-  found, the launcher asks `Download and install it now? [Y/N]`. It downloads
-  the official installer (`opencode-desktop-win-x64.exe`, or `-arm64` on ARM)
-  with curl, no proxy, checks the size and the sha256 published by opencode.ai,
-  runs it silently (`/S`) and looks for the exe again. 32-bit Windows has no
-  desktop build. (v2.27 took it from GitHub `releases/latest`, which still points
-  at the old 1.19.5 - fixed in v2.28.)
-- **Finds the app in any folder.** First `OC_APP`, then 16 known folders under
-  `%LOCALAPPDATA%\Programs`, `%LOCALAPPDATA%`, `%ProgramFiles%` and
-  `%ProgramFiles(x86)%` (`ai.opencode.desktop`, `@opencode-ai\desktop`,
-  `opencode-desktop`, `opencode`, `OpenCode`, ...). If none matches, it reads the
-  uninstall registry keys (read only), checks a running `OpenCode.exe` and does a
-  shallow search of the usual roots, once per session.
-- **Never takes the CLI.** Only an `OpenCode.exe` with `resources\app.asar`
-  next to it counts, so the CLI `opencode.exe` is not mistaken for the app.
-
-### NEW in v2.26 - CLI / Desktop mode menu
-
-The first menu now asks how to run OpenCode. Nothing changes for **CLI**.
-
-- **Desktop mode.** Launches `OpenCode.exe` through the same egress
-  (WARP / TOR / PROXY / NONE). It looks for the exe in `OC_APP` (environment
-  variable, your own path first), then `%LOCALAPPDATA%\Programs\ai.opencode.desktop\`,
-  `...\Programs\@opencode-ai\desktop\`, `...\Programs\opencode\` and
-  `%ProgramFiles%\opencode\`. The menu shows the path it found, or says it
-  was not found.
-- **No folder step in Desktop.** The app has its own project picker, so the
-  folder menu is skipped. In the main menu `[4]` becomes **Mode** and goes back
-  to the CLI / Desktop choice.
-- **Rotation restarts the app.** After a new IP the launcher closes the app and
-  its sidecar and opens it again under the new proxy env. The CLI "continue"
-  message is not sent: the app reopens where it was and you continue yourself.
-- **Closes every opencode process.** Before a Desktop launch it stops
-  `OpenCode.exe` / `opencode-cli.exe` (taskkill is case-insensitive, so a
-  standalone `opencode.exe` CLI left open by hand dies too).
-- **Scope.** The proxy is set only in the environment of the launched app; no
-  system proxy, registry or `setx` is touched.
-- **Known limit.** The app's background service (`opencode-cli.exe`, the process
-  that talks to the API) honours `HTTP_PROXY` and uses the egress. The Electron
-  shell itself is Chromium, which ignores `HTTP_PROXY`, so its own traffic
-  (interface, updates) leaves on your real IP. A `--proxy-server` argument for
-  the shell is not wired yet.
-
-### NEW in v2.22 - v2.25 - hardening pass, verified end to end
-
-Every item below was reproduced first and checked after the fix (WARP, TOR and
-direct runs against a stand-in `opencode`, so no real quota was spent).
-
-- **Service detection (v2.25).** OpenCode v2 lists the subcommand as
-  `service    Manage the background server`; the old marker `opencode service`
-  never matched, so every `service restart` / `service stop` in the launcher
-  was dead code. Both markers are searched now.
-- **No more endless menu on closed stdin (v2.25).** `choice` answers 255 (not
-  0) at EOF and 255 satisfies every `if errorlevel N`, so the main menu looped
-  forever through the token-reset prompt. The three number menus now leave.
-- **Paths with spaces (v2.25).** The TUI and the resume ran `cmd /c <exe>` with
-  the exe unquoted, so `C:\Users\John Smith\...` failed. The command line is
-  one string with the exe quoted inside the `/s /c` wrapper.
-- **Service restarts under the proxy env (v2.25).** After a rotation the
-  background service was restarted on the user's own env (direct), so later
-  requests left on the real IP. The proxy env is exported around that call.
-- **Tor already running (v2.25).** `TOR_DIR` did not exist yet, so the bridge
-  could write neither `bridge.log` nor `bridge.pid` and survived the launcher.
-- **Stale lock (v2.25).** Closing the window with the X skips the cleanup and
-  blocked the next start for up to 2 hours. The lock records the owning
-  `cmd.exe` (`lock\owner`); a dead owner is a stale lock at any age.
-- **Version compare (v2.25).** Leading zeros (`2.08.1`) and one-part versions
-  (`2`) no longer break `:ver_gt`.
-- **v2.22 - v2.24.** Every fixed bug carries an inline `REM v2.2x:` note in
-  the file; the biggest ones are the proxy-variable restore, the TOR circuit
-  renewal with a bounded counter and the built-in HTTP-to-SOCKS bridge.
-### NEW in v2.16 - v2.21 - TOR egress, custom proxy lists, hardening
-
-**Egress modes (since v2.17).** After the working folder is fixed the menu
-asks once: `[1] WARP` (Cloudflare WARP proxy mode, rotation supported),
-`[2] TOR` (local Tor served as an HTTP proxy, auto-setup), `[3] PROXY`
-(free HTTP list, or your own), `[4] NONE` (direct). The choice lives only
-in the opencode process environment - system traffic always stays direct.
-
-**TOR egress (v2.18, v2.19).** With nothing installed the launcher
-downloads the portable **Tor Expert Bundle** once
-(`aus1.torproject.org` downloads.json first, `dist.torproject.org` index
-scrape as fallback, size-gated, unpacked by the built-in `tar.exe`), starts
-it hidden on `TOR_SOCKS_PORT`, and exposes it as an **HTTP proxy on
-`TOR_HTTP_PORT`** through a tiny built-in bridge process - so no Privoxy
-install is needed. Details:
-
- - no installer, no UAC, no service; the bundle lives in
-   `%LOCALAPPDATA%\opencode-launcher\tor\`;
- - a Tor already running (Tor Browser, or any user tor on the SOCKS port)
-   is used as it is and **never killed**: at exit `:tor_stop` (v2.20) only
-   stops tor processes whose image path lives inside that private bundle
-   directory, plus bridge processes carrying the `OC_TORBRIDGE_PS`
-   command-line marker - pid files that match nothing are stale garbage;
- - v2.19 passes `-f <torrc>` with forward-slash paths (any code page and
-   spaces survive), the bridge is a per-connection runspace
-   HTTP(S)-over-SOCKS5h forwarder - one stuck handler can never freeze
-   the others - and the SOCKS reply address is consumed with the correct
-   ATYP length handling;
- - the wait gate checks the whole chain **through the bridge** (a live
-   SOCKS port with a dead bridge is not answered as ready), bounded by
-   `TOR_BOOTSTRAP_WAIT`.
-
-**Custom proxy list (v2.21).** Set `PROXY_LIST_URL` to a raw URL or a
-local `file:///C:/path/lista.txt` and the PROXY mode eats that one:
-
- - one proxy per line; `ip:port`, `http://ip:port` and `https://ip:port`
-   all work (an `https://` line is not mangled);
- - lines starting with `#` or `;` are comments - they are skipped without
-   counting toward `PROXY_TRY_MAX` and without spending a probe;
- - a UTF-8 BOM written by Notepad is stripped before parsing, so the
-   first line still parses;
- - the download size gate is now `PROXY_LIST_MIN_BYTES` (default 20,
-   **0 = off**), so a short personal list is no longer rejected; an empty
-   file still finds no candidates and is reported normally.
-
-**Hardening (v2.20).** The self-update curl branch now downloads the same
-SHA-pinned URL as everything else; every SOCKS reply read in the bridge is
-exact-length (a split reply cannot leave stale bytes for the TLS
-handshake - the old `SEC_E_INVALID_TOKEN` class of failure); the request
-head read carries an 8 s timeout so a silent local client cannot park its
-handler (the value is restored before the pumps, so idle SSE/websocket
-tunnels still sit open indefinitely); appended `wcli.log` is bounded by a
-trim step (last 400 lines above 200 KB).
-
-**Self-update is opt-in (v2.16).** `UPDATE_CHECK` defaults to `0`; run
-`[upd]`, `Update launcher.bat`, or set `UPDATE_CHECK=1` to keep it on.
-
-### NEW in v2.12 - update channel is CDN-proof, picker ESC chain, picker logs
-
- - **`[upd]` and `Update launcher.bat` pin the exact commit.** Both now ask
-   the GitHub API for the newest SHA on `main` and download
-   `raw.githubusercontent.com/jeko1107/opencode-infinite/<SHA>/OpenCode%20Infinite.bat`.
-   A raw/main URL can serve a stale CDN copy for minutes after a push - that
-   is exactly why someone running `[upd]` right after a release could stay on
-   the previous version. A SHA-pinned URL is always the exact bytes of that
-   commit. If the API is unreachable, both fall back to the plain main URL,
-   so nothing is ever harder than it was.
- - **ESC/Cancel in the folder dialog is safe.** Closing the picker (ESC, the
-   X, or `Cancel`) reaches the usual `Try again? [Y/N]` question: `Y` reopens
-   it, `N` returns to the menu. Nothing is silently accepted.
- - **`install.log` records the pick trail**: `picker: dialog starting` /
-   `picker: dialog finished` - so a "it never picked" report is one log read
-   away from a cause.
-
-### NEW in v2.15 - the modern Explorer picker is back, classic on ESC
-
-The v2.14 note below is history: the modern dialog was never the problem. The
-interop definition was. `Add-Type` compiled the C# `IFileDialog`/`IShellItem`
-types as internal (warning: `the generated type is not public`), PowerShell
-could not see `[IFileDialog]`, the cast died inside a silent `try/catch`, and
-every attempt looked like "nothing picked". v2.15 fixes that for real:
-
- - **Types are `public`, and the COM cast happens in C#.** PowerShell 5.1
-   cannot cast the `FileOpenDialog` RCW to the interface (`Cannot convert
-   value ... to type IFileDialog`), so a `public static Shell.PickFolder`
-   does the cast, `SetOptions(FOS_PICKFOLDERS)`, `Show`, and `GetResult`,
-   and returns the path as a string.
- - **No helper files, no temp results.** The picker code lives at the end of
-   this same `.bat`, after `exit /b`; `:run_picker` reads the file back from
-   the `#>>>OC_PICKER_PS` marker and runs it with PowerShell. The chosen
-   folder returns on stdout and is captured with `for /f`. Nothing is
-   written to `%TEMP%` for the pick.
- - **[3] opens the modern Explorer dialog.** ESC or X on it opens the classic
-   `FolderBrowserDialog` right after; cancelling that one reaches the usual
-   `Try again? [Y/N]`. Both dialogs open in the last used folder.
- - **`install.log` names every hop**: `picker: modern dialog starting` then
-   `picker: modern returned a folder` or `returned nothing`, and the same
-   pair for `classic`.
-
-### NEW in v2.14 - the Windows folder dialog owns the pick (superseded by v2.15)
-
-v2.14 removed the modern Explorer-style picker. The compiled C# interop never
-returned a pick reliably (`pick` -> `nothing from the modern dialog` on every
-try, with no exception to name), while the classic Windows folder dialog
-opened, picked, and handed back the path every single time. The launcher used
-that one dialog, opened in the last folder you picked, and `Cancel` asked the
-usual `Try again? [Y/N]`. v2.15 restored the modern dialog after finding the
-actual cause (non-public interop types plus the PowerShell-side cast) and kept
-the classic dialog as the ESC/X fallback.
-
-### NEW in v2.11 - ESC key, no auto-yank after quit
-
-Three fixes to the mouse-and-keyboard side, zero new settings:
-
- - **Folder picker (`[3]`) kept its Windows dialog** and gained the
-   remember-last-folder behavior the modern dialog promised (v2.14 later
-   made that the only picker - see its note above). `[3]` never dies.
- - **ESC works in the folder menu.** The folder menu now reads the console
-   key directly; ESC exits the launcher, any other key remains `[1]-[4]`, and
-   unknown keys just redraw the menu. On redirected stdin (non-interactive
-   consoles) it falls back to the classic `choice` line, so piped flows are
-   untouched.
- - **ESC no longer yanks you back.** Pressing ESC inside OpenCode quits it -
-   that is OpenCode's own keymap and cannot be changed by the launcher. But
-   when OpenCode closes, the old 5-second `choice /d y` auto-relaunched the
-   session right away. The default is `N` in v2.11: a clean quit lands in
-   the menu; press Y within the 5s window if you want the IP + resume
-   (the automatic rotation paths keep their behavior).
-
-### NEW in v2.9 - auto-rotate hardening (the "hit the limit, keep going" fix)
-
-Cloudflare rate-limits rapid `registration new` bursts with HTTP 429. The old
-rotate loop retried 4 times ~6 s apart, hit the throttle, and handed control
-back with an error and a pause. v2.9:
-
- - waits `ROTATE_COOLDOWN` (10 s) between rotate attempts - burst becomes
-  spaced traffic the throttle accepts;
- - after one failed cycle, cools down 60 s and runs **whole new rounds**
-  (`ROTATE_ROUNDS` = 3) - minutes of throttle are ridden out without a
-  single keystroke;
- - only when every round is spent does it pause at the menu with the
-  `wcli.log` pointer;
- - the resume after a successful rotation still reopens the same session
-  (`--continue`) with the auto-resume message, so the chat picks up where
-  the quota error cut it.
-
-### NEW in v2.8 - 32-bit Windows (x86) support
-
-OpenCode publishes no x86 binary. On real 32-bit Windows the script goes:
-bootstrap **32-bit node.js** first, then install OpenCode from npm.
-
- - `:install_node_x86`:
-  1. `winget install OpenJS.NodeJS.LTS` (10-min cap, silent)
-  2. winget missing -> pinned **nodejs.org v22 LTS x86 MSI** with the same
-     size gate, Windows-proxy fallback, silent `/qn /norestart` after UAC
-  3. PATH refresh, npm verification
- - Then: `npm install -g opencode-ai`, the version lookup runs again.
-
-### Downloads in v2.7+ - proxy fallback
-
-Every download sites (self-update, WARP MSI, OpenCode zip, node MSI) tries:
-
-1. direct `curl -f --noproxy "*"` first
-2. if egress is blocked (firewalls, transparent proxies) -> PowerShell
-   `Invoke-WebRequest`, which reads the **Windows system proxy settings**
-   itself, so it succeeds wherever the browser-level network works.
-
-Size gates and header markers make it impossible for an HTML error page,
-truncated file, or wrong resource to slip in.
+- **Target:** `TARGET_COUNTRY` (for example `DE`) and/or `TARGET_PREFIX`
+  (for example `104.28.`). Both empty means any new IP.
+- **Caps:** `TARGET_TRIES` attempts, `TARGET_MINUTES` minutes, and
+  `TARGET_INTERVAL` seconds between attempts.
+- Every attempt prints its number, the IP, the country, and whether it matches.
+  The hunt ends with a summary (target reached, or which cap stopped it).
+- `Esc` or `Q` during the wait stops the hunt and returns to the menu.
+- `AUTO_ROTATE=0` turns the automatic hunt off, and the menu decides. The `R`
+  key at the closed prompt always rotates.
 
 ---
 
-## 7. PID-tracked TUI and the watcher
+## 7. Deep reset and restore
 
- - **`:launch`** spawns OpenCode inside the launcher's console through a tiny
-  PowerShell host; its exact PID is written to `tui.pid` so the watcher can
-  kill precisely the tree it owns (works for .exe, .cmd shim, and .bat alike).
-  PS 5.1 nuance handled: an empty `-ArgumentList` is rejected, so the fresh
-  start path (no flags) calls `Start-Process` without the parameter.
- - **`:watch_start`** - background watcher tails `opencode.log` from the
-  pre-launch byte offset every 2s looking for
-  `Failed to drain Session / free usage limit / rate limit / ...`. It waits
-  4 seconds and only kills the TUI if no INFO/DEBUG recovery lines arrived -
-  so a self-healing stream never gets murdered. Only a stuck chat dies.
- - **`:resume_run`** - resume message with hard `RESUME_TIMEOUT`, captured out
-  and err files, `--standalone` server born under THIS proxy env (the old
-  background server still holds the dead tunnel's sockets otherwise).
- - Quota/fatal errors on the new IP cause **another rotation**, full auto.
+Deep reset is the only option that moves your chats. It asks first.
 
----
+1. Stops OpenCode.
+2. Moves `opencode.db` (and its `-wal` / `-shm` files) and the `storage` folder
+   to `Desktop\opencode_chats_archiviate\<date-time>\`. Each reset gets its own
+   folder. Nothing is deleted.
+3. Clears tokens and the cache.
+4. Starts a fresh session.
 
-## 8. `wcli.log` - every warp-cli failure with the daemon's own words
+**Restore chats** (`4` then `2`, or *Deep reset or restore chats* then *Restore
+chats*): lists the archived folders, newest first. Pick one and the launcher:
 
-`:wcli` wraps all warp-cli calls with a 15s cap, captures stdout+stderr, and
-on failure logs a line like:
+1. stops OpenCode;
+2. moves the chats in place now to `Desktop\opencode_chats_before_restore\<random>\`;
+3. copies the database and storage back from the chosen folder;
+4. starts OpenCode.
 
-```
-2026-10-29T08:48:09+01:00 exit 1: --accept-tos registration new :: Registration missing
-```
-
-So instead of a flood of unreadable `exit 1`, the daemon says its reason
-directly (`Old registration is still around`, `Unable to reach the API`,
-`Registration missing`, `unrecognized subcommand`, ...).
+Login tokens are not restored. Sign in again if OpenCode asks.
 
 ---
 
-## 9. Self-update (`[upd]`)
+## 8. Settings
 
-On every start, before anything interactive:
+Open **Settings** on the home screen. The groups are: Connection, Proxy list,
+Tor, Rotation, Watcher, Probe, Paths, Updates, Appearance, Shortcuts and
+Support. A `*` marks a value you changed. `Enter` edits or toggles the
+selected value. Changes are saved at once.
 
-1. newest script is fetched from
-   `raw.githubusercontent.com/jeko1107/opencode-infinite/main/OpenCode%20Infinite.bat`
-   (30s cap, direct first, Windows proxy fallback)
-2. size ? 20 KB + `REM  OpenCode launcher` header gate (no HTML pages, no
-   wrong resources)
-3. version strings from `(vX.Y)` compared with the running file
-4. equal -> one clean line `[upd] launcher matches the repo`. Different ->
-   `[upd] update found: local v... - repo v...` and a `[Y/N]` prompt.
-5. On `Y`: backup to `%STATE_DIR%\OpenCode Infinite backup <ver>.bat`, then a
-   tiny helper waits for this cmd to release the .bat, swaps the new one in,
-   restarts. The main script exits before anything reads the swapped file.
+The Settings menu also has **Export** and **Import** (one `.json` file; every
+value is checked first, and one wrong value stops the whole import), and
+**Reset to default values** (asks first).
 
-The check is silent when offline or when the repo is unreachable.
+Main settings and their defaults:
 
-Since v2.16 the check ships OFF (`UPDATE_CHECK=0` in the settings block): the
-launcher only touches the network for itself when you set it to `1`.
-
----
-
-## 10. Deep reset (`[5]`)
-
-The only option that touches user files, and it asks first.
-
-1. stop OpenCode (`service stop` then `taskkill` on its oldest
-   PIDs; the database must be lockable)
-2. archive `opencode.db`, `opencode.db-wal`, `opencode.db-shm` with plain
-   `move`, and `storage\` via **robocopy** (`:archive_storage`, exit codes
-   >=8 mean failure) into
-   `Desktop\opencode_chats_archiviate\<yyyyMMdd-HHmmss>\`; a timestamped
-   folder per reset, nothing overwritten
-3. clear tokens (`%USERPROFILE%\.cache\opencode\` + `auth.json`)
-4. start a fresh session with the synth header variables set
-
-Desktop detection uses `GetFolderPath('Desktop')` first, with fallbacks
-(`OneDrive\Desktop`, `OneDrive\Escritorio`, `%USERPROFILE%\Desktop`).
-
-### Restoring
-
-```
-move "%USERPROFILE%\Desktop\opencode_chats_archiviate\<stamp>\opencode.db" "%USERPROFILE%\.local\share\opencode\"
-```
-
----
-
-## 11. Settings (top of file, edit freely)
-
-| Variable | Default | Meaning |
+| Setting | Default | Meaning |
 |---|---|---|
-| `ROTATE_TRIES_MAX` | `4` | rotation attempts for the tunnel, the Tor and the proxy paths |
-| `ROTATE_COOLDOWN` | `10` s | wait between registrations on those paths (Cloudflare throttles rapid `registration new` bursts with 429) |
-| `AUTO_ROTATE` | `1` | automatic IP hunt after a limit (`0` = the menu decides; `R` at the closed prompt always rotates) |
-| `TARGET_COUNTRY` | empty | hunt target: 2-letter country code, e.g. `DE`. Empty = not used |
-| `TARGET_PREFIX` | empty | hunt target: start of an IPv4, e.g. `104.28.`. Empty = not used. Both set = both must match |
-| `TARGET_TRIES` | `10` | attempts per hunt (1-100) |
-| `TARGET_MINUTES` | `15` | time per hunt, minutes (1-240) |
-| `TARGET_INTERVAL` | `15` s | wait between attempts (0-300); `Esc` or `Q` stops during it |
-| `IP_FIND_MAX` | `0` | burned IPs a hunt may reject: 0 = no limit (the attempt cap still applies) |
-| `OCUI_LANG` | `auto` | menu language: `auto`, `en`, `es`, `fr`, `de`, `pt`, `it`, `tr` (set in Settings, Appearance) |
-| `WARP_WAIT` | `6` s | settle time after reconnect |
-| `WARP_CALL_TIMEOUT` | `15` s | one warp-cli call cap |
-| `WHERE_TIMEOUT` | `5` s | one `where` lookup cap |
-| `WATCH` | `1` | log watcher on/off |
-| `RESUME_MSG` | `continue` | auto-message for resume |
-| `RESUME_AUTO` | `1` | auto-approve tool permissions during resume |
-| `RESUME_TIMEOUT` | `90` s | hard cap on the resume message |
-| `PROBE_MODEL` | `opencode/deepseek-v4.1-flash-free` | cheap model for the IP probe |
-| `PROBE` | `1` | probe candidate IPs |
-| `UPDATE_CHECK` | `0` | self-update on start (`[upd]` and `Update launcher.bat` always update, whatever this says) |
+| `ON_CLOSE` | `ask` | After OpenCode closes: `ask` (R new IP and resume, M menu, Q quit) or `quit` |
+| `AUTO_ROTATE` | `1` | Automatic IP hunt after a limit (`0` = off) |
+| `TARGET_COUNTRY` | empty | Country code the hunt looks for, e.g. `DE` |
+| `TARGET_PREFIX` | empty | Start of an IPv4 the hunt looks for, e.g. `104.28.` |
+| `TARGET_TRIES` | `1` | Attempts per hunt (1-100) |
+| `TARGET_MINUTES` | `15` | Time per hunt (1-240) |
+| `TARGET_INTERVAL` | `15` | Seconds between attempts (0-300) |
+| `ROTATE_TRIES_MAX` | `4` | Rotation attempts on the WARP, Tor and proxy paths |
+| `ROTATE_COOLDOWN` | `10` | Seconds between WARP registrations (Cloudflare rate-limits fast ones) |
+| `IP_FIND_MAX` | `0` | Burned IPs a hunt may reject (`0` = no limit; the attempt cap still applies) |
+| `WATCH` | `1` | Watch the OpenCode log for limit errors |
+| `RESUME_MSG` | `continue` | Message sent when a chat is resumed |
+| `RESUME_TIMEOUT` | `90` | Seconds before a stuck resume is killed and the launcher rotates |
+| `PROBE` | `1` | Probe each new IP with one cheap message |
+| `PROBE_MODEL` | `opencode/big-pickle` | Model used for the probe |
+| `UPDATE_CHECK` | `1` | Check for updates on start (asks Y/N, section 11) |
+| `PROXY_LIST_URL` | ProxyScrape free HTTP list | Your proxy list (URL, `file:///` or a local path) |
 | `PROXY_PORT` | `40000` | WARP local proxy port |
-| `TOR_SOCKS_PORT` | `9050` | portable Tor SOCKS port (auto-skip: a tor already listening here is used as it is) |
-| `TOR_HTTP_PORT` | `8118` | local HTTP proxy that fronts the SOCKS port (the built-in bridge, or any Privoxy) |
-| `TOR_AUTO_INSTALL` | `1` | download the portable Tor bundle when nothing answers on the ports |
-| `TOR_BOOTSTRAP_WAIT` | `120` s | bootstrap wait cap before failing the TOR setup |
-| `PROXY_LIST_URL` | ProxyScrape free list | your own list: a URL (`http`, `https`, `ftp`, `file:///`) or a local path, in any format (plain, CSV, JSON, XML, HTML); `#`/`;` comments skipped, SOCKS ignored |
-| `PROXY_LIST_MIN_BYTES` | `20` | download size gate for the list; `0` = off, so a short custom list is accepted |
-| `PROXY_TRY_MAX` | `12` | candidates tried per rotation before giving up |
-| `PROXY_PROBE_TIMEOUT` | `8` s | one probe against one candidate proxy |
+| `TOR_SOCKS_PORT` / `TOR_HTTP_PORT` | `9050` / `8118` | Tor SOCKS port and the bridge HTTP port |
+| `TOR_AUTO_INSTALL` | `1` | Download the portable Tor bundle when none is running |
+| `TOR_BOOTSTRAP_WAIT` | `120` | Seconds to wait for Tor to connect |
+| `LOG_ENABLED` / `LOG_MAX_KB` | `1` / `1024` | Launcher log on/off and its size limit (the log is trimmed to its newest part) |
+| `LOG_MASK_IP` | `1` | Mask public IPs in the support report |
+| `OCUI_LANG` | `auto` | Language (section 9) |
+| `OCUI_THEME` | `ocean` | Colors: ocean, forest, sunset, mono, rainbow |
+| `KEY_ROTATE` / `KEY_MENU` / `KEY_QUIT` | `R` / `M` / `Q` | One-letter keys for the closed prompt (must differ) |
+
+The Windows Terminal and console font can be set from **Settings, Appearance**
+too. The launcher keeps the original font and restores it when you ask.
 
 ---
 
-## 12. Compatibility notes
+## 9. Languages
 
- - ASCII-only file, CRLF, no BOM - same behavior in any code page;
-  no `C:\Users` strings anywhere; all paths via environment.
- - Windows 10 ?1803 (with `curl.exe`) -> full support. On older builds the
-  PowerShell fallback covers everything needed.
- - PowerShell 5.1 (System32) - the launcher never depends on a different
-  install; `PSX` is absolute.
- - x64 + arm64 native. **x86**: no WARP, but OpenCode runs (npm + 32-bit node).
- - Any current WARP GA (2023.3+ command set). Old warp-cli -> readable reason
-  in wcli.log instead of silent failure.
- - opencode v2 (npm @opencode/cli, official standalone build, portable) - chosen by newest version;
-  v1-with-v2-DB is detected and reported, not run.
+Pick the language in **Settings, Appearance, Language**. `auto` follows
+Windows.
+
+English, Español, Français, Deutsch, Português, Italiano and Türkçe.
+
+Each language is a JSON file in the `langs` folder of this repository. The
+launcher downloads only the file you chose, refreshes it at most once a day, and
+keeps English built in as the fallback. Logs and the support report stay in
+English.
+
+---
+
+## 10. Keys and commands
+
+| Key | Where | Action |
+|---|---|---|
+| `Enter` | menus | Select |
+| Arrows | menus | Move |
+| `Esc` | menus, prompts | Back |
+| `Ctrl+C` | anywhere | Quit the launcher. It stops the processes it started and leaves the window open |
+| `R`, `M`, `Q` | closed-OpenCode prompt | New IP and resume, menu, quit (letters are editable in Shortcuts) |
+
+Commands created by **Connect with opencode**. They work in any terminal:
+
+| Command | What it does |
+|---|---|
+| `opencode` | Starts OpenCode through the saved connection |
+| `opencodeinf` | Opens the launcher menu again |
+| `opencodeoc` | Starts the OpenCode you had before the launcher, with no connection. Use it when the launcher breaks |
+| `OpenCode Infinite.bat --run` | Quick start with the saved connection |
+
+Start the launcher in a folder: drag the folder onto the `.bat`, or run
+`OpenCode Infinite.bat "D:\work\project"`. UNC paths work too.
+
+---
+
+## 11. Updates
+
+On start, with `UPDATE_CHECK=1`, the launcher checks for:
+
+- **A newer launcher** in this repository. It shows `update found` and asks
+  `[Y/N]`. On `Y` it backs up the current file, swaps in the new one, and
+  restarts.
+- **A newer OpenCode** on opencode.ai (official release metadata, SHA-256
+  checked). It asks `[Y/N]`, closes every OpenCode process, then installs. The
+  update uses the same channel as the running command: npm or the standalone
+  build.
+- **A newer OpenCode Desktop** (Desktop mode only). Same flow, with the silent
+  installer.
+
+No network, or an unreadable version, changes nothing. The checks run directly,
+without the WARP proxy.
+
+---
+
+## 12. Files and folders
+
+| Path | Purpose |
+|---|---|
+| `%USERPROFILE%\.local\share\opencode\` | OpenCode data (chats, database). Owned by OpenCode |
+| `%LOCALAPPDATA%\opencode-infinite\` | Launcher state folder |
+| `...\opencode-infinite\app\` | The launcher copy that the `opencode` commands run |
+| `...\opencode-infinite\config.env`, `config.json` | Your settings |
+| `...\opencode-infinite\langs\` | Language files |
+| `...\opencode-infinite\launcher.log` | Launcher log (trimmed at `LOG_MAX_KB`) |
+| `...\opencode-infinite\reports\` | Support reports |
+| `...\opencode-infinite\tor\` | Portable Tor (TOR mode only) |
+| `Desktop\opencode_chats_archiviate\` | Chats archived by deep reset |
+| `Desktop\opencode_chats_before_restore\` | Chats moved aside by restore |
+
+Environment variables are used for every path. No user name is written into the
+file.
 
 ---
 
 ## 13. Troubleshooting
 
-| Symptom | Fix |
+| Symptom | What to do |
 |---|---|
-| `Start-Process : argument is NULL` at fresh start | you are on pre-v2.6; run `Update launcher.bat` once in that folder |
-| `wcli.log` full of `exit 1` with NO reason | pre-v2.6 also; v2.6+ prints the daemon's message |
-| downloads fail everywhere (MSI/zip/self-update) | v2.7+ retries through Windows proxy; check the printed URLs in a browser |
-| `IP already burned, rotating` loops | free-tier quota; Ctrl+C stops the hunt |
-| `deep reset` stops at `nothing to archive` | OpenCode refused to die; kill the process window and repeat |
-| `[upd]` says the repo copy failed to apply | the downloaded copy stays in `%STATE_DIR%\upd_remote.bat`; replace manually |
-| [upd] says the launcher matches the repo right after a release | you hit the stale raw/main CDN window (fixed in v2.12 - the updater now pins the commit SHA). Run [upd] again, or fetch a pinned commit copy with Update launcher.bat |
-| `[3]` opens the modern dialog, ESC closes it and the classic opens right after | expected v2.15 behaviour: the modern cancel is the classic fallback. `install.log` shows `picker: modern returned nothing` followed by `picker: classic dialog starting`; cancelling the classic asks `Try again? [Y/N]` |
-| `install.log` keeps saying `picker: nothing from the modern dialog` | you are on pre-v2.15, where the interop types were internal and the modern pick never landed. Update with `[upd]` (or `Update launcher.bat`) |
-| `Invoke-WebRequest : positional parameter not found` while installing | you copied the old README one-liner that nests `PowerShell -Command`; PS 5.1 strips the inner quotes and the URL arrives split. Use the one-line install in section 2 (single shell, `Copy-Item`, no nested `-Command`) |
-| my custom `PROXY_LIST_URL` list is ignored / "proxy list too small" | one proxy per line, `ip:port` or `http(s)://ip:port`; a short personal list hits the download gate - set `PROXY_LIST_MIN_BYTES=0`. `#`/`;` comment lines and a Notepad UTF-8 BOM are handled (v2.21) |
-| TOR mode: `still not up after 120s` | the first bootstrap can be slower than the cap - raise `TOR_BOOTSTRAP_WAIT`. The last tor.log lines are printed next to the message; the log lives in `%LOCALAPPDATA%\opencode-launcher\tor\` |
-| first paint shows `Another OpenCode launcher seems to be running. Continue anyway? [Y/N]` | a leftover lock in `%LOCALAPPDATA%\opencode-launcher\lock\` (usually a previous Ctrl+C). `Y` is safe - it is only an anti-double-open warning |
-| `Terminate batch job (Y/N)?` | Windows is asking because Ctrl+C was pressed inside a batch context. Answer no - on a Spanish system the keys are S/N, and pressing N is what keeps the launcher running while S kills it there |
+| The menu shows an old version or old text | Run `Update launcher.bat`, or accept the update prompt. Translations come from the repository, so they update on the next start |
+| `Terminate batch job (Y/N)?` | You pressed `Ctrl+C` in a batch context. Answer `N`, or use `Ctrl+C` again |
+| Rotation keeps failing on WARP | Open `Renew session` from the home screen. Check `wcli.log` in the state folder for the daemon's own reason |
+| TOR says it is not up after 120 s | Raise `TOR_BOOTSTRAP_WAIT`. The last `tor.log` lines are printed with the message |
+| Your custom proxy list is ignored | One proxy per line (`ip:port` or `http://ip:port`). For a short list set `PROXY_LIST_MIN_BYTES=0` |
+| `Another OpenCode launcher seems to be running` | A leftover lock from a Ctrl+C. `Y` is safe |
+| OpenCode does not open after a change | Start `opencodeoc` to reach OpenCode, then send the support report |
+| Font change does not show | Reopen the tab. Some terminals keep their own font setting (VS Code: `terminal.integrated.fontFamily`) |
+
+For anything else, open **Support report** from the home screen and attach the
+file to an issue.
 
 ---
 
 ## 14. Verify the file
 
-```
+```cmd
 certutil -hashfile "OpenCode Infinite.bat" SHA256
 ```
 
-The v2.28 file hashes to
-`752F2F9B7DA7F83C184A8AFC2E2AAACEAE6BDA4A9A2E4BC46D286BD674BF9703`.
-A different hash means you are not on the shipped copy - re-download it
-with the one-line install in section 2. Stale copies usually trace back
-to mid-download truncation, or someone else's half-broken mirror.
+The shipped copy of this version hashes to:
 
-### Why antivirus may flag it
+`54B55209B3BF19EB315F42E0BFA48DA628865F3C70BA27C6D0B0ABEC62D3AF44`
 
-One engine classically names this file `BAT.Obfuscated.10`. It is a heuristic,
-not a signature: the scanner sees batch patterns that malware droppers also
-use, and those patterns are here because a working launcher needs them:
+A different hash means the file is not the shipped copy. Download it again
+with the install command in section 2.
 
-| Pattern in this launcher | Why it exists here | Why AV flags it |
-|---|---|---|
-| `%TEMP%\oc_*.txt` scratch + `%RANDOM%` names (11 sites) | temp result files for the watcher, resume, probe and version checks; random names prevent two launcher instances trampling each other | files appear in %TEMP% with random names - the dropper signature |
-| download to `%TEMP%` then execute | this is exactly how the launcher installs WARP/node/OpenCode when missing | download-and-execute is the textbook dropper flow |
-| `start "" /b "%PSX%" ...` detached PowerShell children | the TUI wrapper, the watcher, every helper call | spawning hidden PowerShell from a batch |
-| `if ... ( ... )` blocks with delayed expansion, `^|` `^&` escapes, `>nul 2>&1` | batch needs this to be robust inside `if`/`for` blocks | "obfuscated" = lots of escapes in one file |
-| one ~3,100-line `.bat` with ~100 `call :label` targets | every feature lives in its own subroutine | size + goto density beats the scanner's normal-file heuristics |
+### Antivirus
 
-The complete outbound footprint is these public hosts -
-`raw.githubusercontent.com` + `github.com` (launcher updates, OpenCode
-release zip), `downloads.cloudflareclient.com` (WARP MSI), `nodejs.org`
-(32-bit node MSI), `aus1.torproject.org` + `dist.torproject.org`
-(portable Tor bundle, TOR mode only), `www.cloudflare.com` (the
-`cdn-cgi/trace` IP check), `api.proxyscrape.com` or whatever
-`PROXY_LIST_URL` points to (PROXY mode - your own list, your own host).
-No base64/`-EncodedCommand` blobs, no registry writes, no persistence keys,
-no startup folders, no scheduled tasks, no self-copy into system paths,
-and it deletes its own `%TEMP%` scratch on every exit.
+Some engines flag batch launchers as heuristic detections. The usual reasons:
+the launcher writes temporary files, downloads installers and runs them after
+checking their hash, and starts hidden PowerShell helpers. The launcher does not
+write registry keys, services, scheduled tasks or startup entries, and it removes
+its temporary files on exit. Hash-check the file, and if an engine still flags
+it, submit the hash to that vendor as a false positive.
 
-If your selected engine still dislikes the file, the practical answer is:
-hash-verify your copy, then submit the hash as a false positive to that
-engine's portal (Microsoft, Avira, DrWeb all accept submissions).
-
-Quick structural checks with findstr:
-
-```
-findstr /n "self_update" "OpenCode Infinite.bat"
-findstr /n "install_node_x86" "OpenCode Infinite.bat"
-findstr /n "UPDATE_URL" "OpenCode Infinite.bat"
-```
+The network hosts it uses are GitHub (updates, the launcher), `opencode.ai`
+(OpenCode), `downloads.cloudflareclient.com` (WARP), `nodejs.org` (32-bit
+Node.js), `dist.torproject.org` (Tor, TOR mode), `www.cloudflare.com` (IP
+check), and the proxy list you choose.
 
 ---
-**jeko1107** - https://github.com/jeko1107/opencode-infinite - launcher lives and keeps itself current.
+
+**jeko1107** - https://github.com/jeko1107/opencode-infinite
