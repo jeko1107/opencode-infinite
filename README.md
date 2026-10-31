@@ -1,4 +1,4 @@
-# OpenCode Infinite - launcher handbook (v2.28)
+# OpenCode Infinite - launcher handbook (v2.30)
 
 A single-file Windows batch launcher for OpenCode that adds multi-egress
 (Cloudflare WARP, Tor, free/custom HTTP proxy lists, or direct), dependency
@@ -109,8 +109,9 @@ Before the main menu appears, the launcher asks the **egress mode** once:
 the opencode process environment, system traffic stays direct.
 
 After **any** run exit, the launcher checks the log and, if this IP is dead:
-rotates and reopens the session automatically. Full cycle needs **one Ctrl+C
-and one keystroke** between IPs.
+rotates and reopens the session automatically. The rotation is a hunt for an IP
+that matches your target (see v2.30). `Esc` or `Q` stops the hunt and returns to
+the menu; `Ctrl+C` quits the launcher.
 
 ---
 
@@ -147,6 +148,46 @@ Install fallback:
 > official standalone build from opencode.ai (x64, arm64 or x64-baseline),
 > sha256-verified -> if that fails and npm is present, `npm install -g @opencode/cli`
 > (32-bit Windows: `opencode-ai` via 32-bit node, the only build it has)
+
+### NEW in v2.30 - automatic IP hunt with a target, languages, one copy
+
+**Automatic IP hunt (Settings, Rotation)**
+- When the chat hits a limit, the launcher hunts for a new exit IP. The hunt
+  stops on the first IP that matches the target, or when a cap is reached.
+- Target: `TARGET_COUNTRY` (a 2-letter code, e.g. `DE`) and/or `TARGET_PREFIX`
+  (the start of an IPv4, e.g. `104.28.`). Both empty = any new IP.
+- Caps: `TARGET_TRIES` (attempts per hunt, default 10), `TARGET_MINUTES`
+  (time per hunt, default 15), `TARGET_INTERVAL` (seconds between attempts,
+  default 15).
+- `AUTO_ROTATE` = `off` turns the automatic hunt off: the menu decides. The
+  `R` choice at the closed prompt always rotates.
+- Each attempt prints its number, IP, country, whether it matches, and how
+  many attempts are left. The hunt ends with a summary: target reached, attempt
+  limit, time limit, burned-IP limit, or stopped by you.
+- `Esc` or `Q` during the wait stops the hunt and returns to the menu without
+  closing the window. `Ctrl+C` quits.
+- An IP already tried in the same hunt is skipped.
+- `ROTATE_ROUNDS` is gone: the attempt cap replaces the rounds. `IP_FIND_MAX`
+  still limits burned IPs, and the attempt cap still applies.
+
+**Languages**
+- The menus come in 7 languages: English, Español, Français, Deutsch,
+  Português, Italiano and Türkçe. Pick one in Settings, Appearance,
+  Language. `auto` follows Windows.
+- Each language is a JSON file in `langs/` (`en` is the built-in fallback).
+  The launcher also stores them inside itself, so it works offline.
+
+**Launcher and commands**
+- Setup copies the launcher to `%LOCALAPPDATA%\opencode-infinite\app\` and the `opencode`
+  and `opencodeinf` commands run that copy. A second download of the file hands
+  over to it, or replaces it when it is newer.
+- When the copy is missing, the command offers to download it again.
+- The shortcuts keep the window open at the prompt after the launcher quits.
+- A window that was opened by double-click stays open until a key is pressed.
+- Menus read keys directly, so `Ctrl+C` quits cleanly instead of asking
+  "Terminate batch job?".
+- A second instance brings the window of the first one to the front.
+- The banner URL is centered under the logo.
 
 ### NEW in v2.28 - the right opencode version, any proxy list, Tor fixes
 
@@ -520,10 +561,16 @@ move "%USERPROFILE%\Desktop\opencode_chats_archiviate\<stamp>\opencode.db" "%USE
 
 | Variable | Default | Meaning |
 |---|---|---|
-| `ROTATE_TRIES_MAX` | `4` | infrastructure rotation attempts |
-| `ROTATE_COOLDOWN` | `10` s | wait between rotate attempts (Cloudflare throttles rapid `registration new` bursts with 429) |
-| `ROTATE_ROUNDS` | `3` | full rotate cycles with a 60 s cool-down between them before giving up (0 = one cycle) |
-| `IP_FIND_MAX` | `0` | hunt-limit: 0 = until one works (Ctrl+C stops) |
+| `ROTATE_TRIES_MAX` | `4` | rotation attempts for the tunnel, the Tor and the proxy paths |
+| `ROTATE_COOLDOWN` | `10` s | wait between registrations on those paths (Cloudflare throttles rapid `registration new` bursts with 429) |
+| `AUTO_ROTATE` | `1` | automatic IP hunt after a limit (`0` = the menu decides; `R` at the closed prompt always rotates) |
+| `TARGET_COUNTRY` | empty | hunt target: 2-letter country code, e.g. `DE`. Empty = not used |
+| `TARGET_PREFIX` | empty | hunt target: start of an IPv4, e.g. `104.28.`. Empty = not used. Both set = both must match |
+| `TARGET_TRIES` | `10` | attempts per hunt (1-100) |
+| `TARGET_MINUTES` | `15` | time per hunt, minutes (1-240) |
+| `TARGET_INTERVAL` | `15` s | wait between attempts (0-300); `Esc` or `Q` stops during it |
+| `IP_FIND_MAX` | `0` | burned IPs a hunt may reject: 0 = no limit (the attempt cap still applies) |
+| `OCUI_LANG` | `auto` | menu language: `auto`, `en`, `es`, `fr`, `de`, `pt`, `it`, `tr` (set in Settings, Appearance) |
 | `WARP_WAIT` | `6` s | settle time after reconnect |
 | `WARP_CALL_TIMEOUT` | `15` s | one warp-cli call cap |
 | `WHERE_TIMEOUT` | `5` s | one `where` lookup cap |
