@@ -149,6 +149,19 @@ Install fallback:
 > sha256-verified -> if that fails and npm is present, `npm install -g @opencode/cli`
 > (32-bit Windows: `opencode-ai` via 32-bit node, the only build it has)
 
+### NEW in v2.31 - keys, settings, languages
+
+- **Esc goes back, never closes.** In every menu and text prompt Esc returns to the previous screen. Ctrl+C is the only key that quits the launcher; it stops the processes it started and leaves the terminal open, with no Y/N question.
+- **Reopen the menu.** The terminal command `opencodeinf` opens the launcher menu again, as many times as needed.
+- **Original OpenCode.** The terminal command `opencodeoc` starts the OpenCode you installed before the launcher, without the launcher or the connection. Use it when the launcher breaks. Run **Connect with opencode** (setup) once to create it.
+- **Editable shortcuts.** Settings -> Shortcuts: `KEY_ROTATE` (R), `KEY_MENU` (M), `KEY_QUIT` (Q). They are one letter each and must differ. The fixed keys (Esc, arrows, Ctrl+C) and the terminal commands are listed next to them for reference.
+- **Languages.** Settings -> Language opens a list (`auto` plus 7 languages). Only the chosen language file is downloaded from the `langs/` folder of the repository. Translations: es, fr, de, pt, it, tr. The launcher's own messages (menus and the lines printed by the batch) follow the same language; logs and the support report stay in English; English is the built-in fallback.
+- **Export / import settings.** Settings -> Export writes the changed settings to one `.json` file (default: Desktop). Settings -> Import reads that file; every value is checked first, and one wrong value stops the whole import, so nothing is half changed. Unknown keys are skipped and counted.
+- **Defaults changed.** `TARGET_TRIES` is 1 (was 10). `PROBE_MODEL` is `opencode/big-pickle`. `UPDATE_CHECK` is 1: each start checks GitHub and asks Y/N before replacing an old copy in `AppData\Local`.
+- **Old copy problem.** The `opencode` command runs the copy saved at setup (`%STATE_DIR%\app`). It is replaced when the newer launcher is run by hand, or by the update check above. Before this change the check was off, so old copies stayed.
+
+Not in this release: the sessions browser (list of past sessions by project folder), a separate app for external tasks, and auto-continue for external tasks.
+
 ### NEW in v2.30 - automatic IP hunt with a target, languages, one copy
 
 **Automatic IP hunt (Settings, Rotation)**
